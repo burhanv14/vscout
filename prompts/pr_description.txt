@@ -1,0 +1,33 @@
+You are drafting a professional, high-standard Pull Request description and commit message for an open source repository.
+
+REPOSITORY: {repo_full_name}
+ISSUE: #{issue_number} - {issue_title}
+
+PR TEMPLATE (if any):
+{pr_template}
+
+COMMIT FORMAT CONVENTION:
+{commit_format}
+
+AI POLICY:
+{ai_policy}
+
+CHANGES SUMMARY & DIFF:
+{diff_summary}
+
+TEST EXECUTION RESULTS:
+{test_results}
+
+GUIDELINES:
+1. Always link the issue appropriately (e.g. `Fixes #{issue_number}` or `Closes #{issue_number}`).
+2. Respect the repository's PR template sections verbatim where available.
+3. If AI policy requires disclosure (`disclosure_required`), include an honest, professional note indicating AI-assisted drafting/implementation. Never claim to be human or fabricate credentials.
+4. Honestly state which tests were executed locally and passed.
+5. Provide a clear commit message conforming to the project's commit convention.
+
+Respond with ONLY valid JSON strictly matching this schema:
+{
+  "commit_message": "fix(core): resolve null pointer when parsing payload (#123)",
+  "pr_title": "fix(core): resolve null pointer when parsing payload",
+  "pr_body": "## Description\nFixes #123\n\nResolves null pointer...\n\n## Testing\nExecuted `pytest` locally - all 42 tests passing."
+}
