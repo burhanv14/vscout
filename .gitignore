@@ -218,3 +218,18 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Environments and Secrets
+.env
+.env.*
+!.env.example
+
+# Agent runtime state and workspaces
+workspaces/*
+!workspaces/.gitkeep
+state/*.db
+state/*.db-journal
+logs/*.jsonl
+reports/*.md
+!reports/.gitkeep
+config.yaml
