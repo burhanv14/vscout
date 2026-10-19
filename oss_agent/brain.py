@@ -30,19 +30,42 @@ class LLMBrain:
         self.log_file.parent.mkdir(parents=True, exist_ok=True)
 
     def _find_opencode_binary(self) -> str:
-        if self.config.opencode.opencode_path and os.path.exists(self.config.opencode.opencode_path):
-            return str(Path(self.config.opencode.opencode_path).resolve())
+        """Locate the opencode executable, preferring a direct .exe.
 
-        which_bin = shutil.which("opencode")
-        if which_bin:
-            return which_bin
-
-        # Check standard Windows npm and AppData locations
+        On Windows, npm/pnpm install shell shims (opencode.cmd / opencode.ps1)
+        on PATH while the real executable lives in
+        <shim_dir>/node_modules/@opencode/cli/bin/opencode.exe. Running a .cmd
+        shim with shell=True routes through cmd.exe /c, which mangles multi-line
+        prompts (newlines/shell metacharacters), so opencode receives a broken
+        prompt and replies with chat text instead of JSON. A direct .exe passes
+        the prompt verbatim via CreateProcess argv.
+        """
         appdata = os.environ.get("APPDATA", "")
         localappdata = os.environ.get("LOCALAPPDATA", "")
         userprofile = os.environ.get("USERPROFILE", "")
 
+        # 1. Explicit config path
+        cfg = self.config.opencode.opencode_path
+        if cfg and os.path.exists(cfg):
+            return str(Path(cfg).resolve())
+
+        # 2. Binary discovered on PATH
+        path_bin = shutil.which("opencode")
+        if path_bin:
+            suffix = Path(path_bin).suffix.lower()
+            # PATHEXT lists .EXE before .CMD, so a direct .exe is preferred here.
+            if suffix == ".exe":
+                return path_bin
+            # A shell shim (.cmd/.bat/.ps1) was found; locate the real opencode.exe
+            # shipped alongside npm/pnpm shims in node_modules.
+            exe_sibling = Path(path_bin).parent / "node_modules" / "@opencode" / "cli" / "bin" / "opencode.exe"
+            if exe_sibling.exists():
+                return str(exe_sibling)
+            return path_bin
+
+        # 3. Standard Windows install locations
         candidates = [
+            Path(appdata) / "npm" / "opencode.exe",
             Path(appdata) / "npm" / "opencode.cmd",
             Path(localappdata) / "pnpm" / "opencode.cmd",
             Path(userprofile) / ".local" / "bin" / "opencode.exe",

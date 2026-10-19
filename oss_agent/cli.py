@@ -133,16 +133,34 @@ class AgentApp:
 
     def cmd_run(self) -> None:
         console.print("[bold blue]Running full autonomous pipeline (Stage 1 to Stage 5)...[/bold blue]")
-        # 1. Repo Discovery
-        stage1 = RepoDiscoveryStage(self.config, self.brain, self.github, self.state)
-        ranked_repos = stage1.run()
-        if not ranked_repos:
-            return
 
-        # 2. Issue Discovery
-        stage2 = IssueDiscoveryStage(self.config, self.github, self.state)
-        candidate_issues = stage2.run(ranked_repos)
+        # Progressive discovery: rotate Stage 1's sort/page each round so we surface
+        # different valid repos each time, and keep searching until we find repos
+        # that actually have unassigned candidate issues.
+        max_discovery_rounds = 5
+        candidate_issues = []
+        ranked_repos = []
+
+        for round_idx in range(1, max_discovery_rounds + 1):
+            # 1. Repo Discovery (cursor rotates each call -> different repos per round)
+            stage1 = RepoDiscoveryStage(self.config, self.brain, self.github, self.state)
+            ranked_repos = stage1.run()
+            if not ranked_repos:
+                console.print("[yellow]No candidate repositories found this round.[/yellow]")
+                break
+
+            # 2. Issue Discovery
+            stage2 = IssueDiscoveryStage(self.config, self.github, self.state)
+            candidate_issues = stage2.run(ranked_repos)
+            if candidate_issues:
+                break
+
+            console.print(
+                f"[yellow]Round {round_idx}: no unassigned issues found; rotating discovery search...[/yellow]"
+            )
+
         if not candidate_issues:
+            console.print("[yellow]No issues found after rotating discovery rounds.[/yellow]")
             return
 
         # 3. Worth-It Analysis

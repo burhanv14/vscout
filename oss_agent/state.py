@@ -253,6 +253,12 @@ class StateStore:
             row = conn.execute("SELECT * FROM issues WHERE id = ?", (issue_id,)).fetchone()
             return dict(row) if row else None
 
+    def get_evaluated_repo_names(self) -> List[str]:
+        """Return all repo_full_name values already evaluated in Stage 1."""
+        with self._get_connection() as conn:
+            rows = conn.execute("SELECT repo_full_name FROM repos").fetchall()
+            return [row["repo_full_name"] for row in rows]
+
     def get_top_contribute_issues(self, min_score: int = 60, limit: int = 10) -> List[Dict[str, Any]]:
         with self._get_connection() as conn:
             rows = conn.execute(

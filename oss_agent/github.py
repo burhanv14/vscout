@@ -147,6 +147,8 @@ class GitHubClient:
         max_stars: int = 25000,
         pushed_after_iso: Optional[str] = None,
         limit: int = 15,
+        sort: str = "updated",
+        page: int = 1,
     ) -> List[Dict[str, Any]]:
         """Search GitHub for active, non-archived repositories matching tech stack."""
         q_parts = ["is:public", "archived:false", f"stars:{min_stars}..{max_stars}"]
@@ -162,13 +164,19 @@ class GitHubClient:
 
         if self.use_gh:
             try:
-                res = self._run_gh_cli(["api", "search/repositories", "-F", f"q={query}", "-F", f"per_page={limit}", "-F", "sort=updated"])
+                res = self._run_gh_cli(
+                    ["api", "search/repositories", "-F", f"q={query}", "-F", f"per_page={limit}", "-F", f"sort={sort}", "-F", f"page={page}"]
+                )
                 if isinstance(res, dict) and "items" in res:
                     return res["items"]
             except Exception as gh_err:
                 logger.warning(f"gh search failed, falling back to REST: {gh_err}")
 
-        data = self._request_api("GET", "search/repositories", params={"q": query, "per_page": limit, "sort": "updated"})
+        data = self._request_api(
+            "GET",
+            "search/repositories",
+            params={"q": query, "per_page": limit, "sort": sort, "page": page},
+        )
         return data.get("items", []) if isinstance(data, dict) else []
 
     def get_repo(self, owner: str, repo: str) -> Dict[str, Any]:
@@ -214,24 +222,24 @@ class GitHubClient:
                 docs[candidate] = content
         return docs
 
-    def get_issues(
+    def _fetch_issues_page(
         self,
         owner: str,
         repo: str,
-        labels: Optional[List[str]] = None,
-        state: str = "open",
-        limit: int = 20,
+        label: Optional[str],
+        state: str,
+        limit: int,
     ) -> List[Dict[str, Any]]:
-        """Fetch candidate issues. Filter out Pull Requests and assigned issues."""
+        """Fetch a single page of issues, optionally filtered by one label."""
         params: dict = {"state": state, "per_page": limit, "sort": "updated", "direction": "desc"}
-        if labels:
-            params["labels"] = ",".join(labels)
+        if label:
+            params["labels"] = label
 
         if self.use_gh:
             try:
                 gh_args = ["api", f"repos/{owner}/{repo}/issues", "-F", f"state={state}", "-F", f"per_page={limit}"]
-                if labels:
-                    gh_args.extend(["-F", f"labels={','.join(labels)}"])
+                if label:
+                    gh_args.extend(["-F", f"labels={label}"])
                 res = self._run_gh_cli(gh_args)
                 if isinstance(res, list):
                     return [item for item in res if "pull_request" not in item]
@@ -240,9 +248,54 @@ class GitHubClient:
 
         data = self._request_api("GET", f"repos/{owner}/{repo}/issues", params=params)
         if isinstance(data, list):
-            # GitHub Issues endpoint also returns PRs; filter them out
             return [item for item in data if "pull_request" not in item]
         return []
+
+    def get_issues(
+        self,
+        owner: str,
+        repo: str,
+        labels: Optional[List[str]] = None,
+        state: str = "open",
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """Fetch candidate issues.
+
+        GitHub's REST `labels` filter uses AND semantics (issue must have ALL
+        labels). To match the intent of "any of these preferred labels", we
+        issue one request per label when multiple are supplied and merge the
+        results (OR semantics), deduplicating by issue number.
+        """
+        if not labels:
+            return self._fetch_issues_page(owner, repo, None, state, limit)
+
+        if len(labels) == 1:
+            return self._fetch_issues_page(owner, repo, labels[0], state, limit)
+
+        # OR semantics: one call per preferred label, merge + dedupe
+        merged: List[Dict[str, Any]] = []
+        seen_numbers: set = set()
+        per_label_limit = max(1, limit // len(labels)) + 1
+        for label in labels:
+            try:
+                page = self._fetch_issues_page(owner, repo, label, state, per_label_limit)
+            except Exception as exc:
+                logger.warning(f"Failed to fetch issues for {owner}/{repo} with label '{label}': {exc}")
+                continue
+            for item in page:
+                number = item.get("number")
+                if number is not None and number in seen_numbers:
+                    continue
+                if number is not None:
+                    seen_numbers.add(number)
+                merged.append(item)
+                if len(merged) >= limit:
+                    break
+            if len(merged) >= limit:
+                break
+
+        merged.sort(key=lambda it: it.get("updated_at", ""), reverse=True)
+        return merged[:limit]
 
     def get_issue(self, owner: str, repo: str, issue_number: int) -> Dict[str, Any]:
         return self._request_api("GET", f"repos/{owner}/{repo}/issues/{issue_number}")
