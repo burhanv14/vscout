@@ -96,7 +96,7 @@ class WorthItAnalysisStage:
             issue_created_at=issue.get("created_at", "unknown"),
             issue_updated_at=issue.get("updated_at", "unknown"),
             issue_labels=", ".join(issue.get("labels", [])),
-            issue_assignees="None",
+            issue_assignees=", ".join(a.get("login", "unknown") for a in issue.get("assignees", [])) or "None",
             issue_body=issue.get("body", "(No description provided)"),
             comments_and_timeline=json.dumps({"comments": formatted_comments, "timeline": formatted_timeline}, indent=2),
             linked_prs_and_commits=json.dumps({"pull_requests": prs_summary, "commits": commits_summary}, indent=2),

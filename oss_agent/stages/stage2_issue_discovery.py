@@ -60,6 +60,7 @@ class IssueDiscoveryStage:
                     "author": issue.get("user", {}).get("login", "unknown"),
                     "url": issue.get("html_url", f"https://github.com/{full_name}/issues/{issue['number']}"),
                     "labels": labels,
+                    "assignees": [a.get("login", "unknown") for a in issue.get("assignees", []) if isinstance(a, dict)],
                     "body": issue.get("body", "") or "",
                     "created_at": issue.get("created_at", ""),
                     "updated_at": issue.get("updated_at", ""),
