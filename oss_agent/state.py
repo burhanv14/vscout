@@ -1,6 +1,6 @@
 import json
 import sqlite3
-from datetime import datetime, date
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -52,23 +52,8 @@ class StateStore:
                     estimated_hours REAL,
                     risks_json TEXT,
                     reasoning TEXT,
-                    policy_json TEXT,
-                    decision TEXT, -- CONTRIBUTE, SKIP, NEEDS_HUMAN
-                    workspace_dir TEXT,
-                    branch_name TEXT,
-                    diff_summary TEXT,
-                    pr_url TEXT,
                     created_at TEXT,
                     updated_at TEXT
-                );
-
-                CREATE TABLE IF NOT EXISTS pr_submissions (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    repo_full_name TEXT,
-                    issue_number INTEGER,
-                    pr_url TEXT,
-                    submitted_date TEXT, -- YYYY-MM-DD
-                    submitted_at TEXT
                 );
 
                 CREATE TABLE IF NOT EXISTS checkpoints (
@@ -169,84 +154,6 @@ class StateStore:
                 ),
             )
 
-    def save_policy_and_decision(
-        self,
-        repo_full_name: str,
-        issue_number: int,
-        policy_dict: Dict[str, Any],
-        decision: str,
-    ) -> None:
-        issue_id = f"{repo_full_name}#{issue_number}"
-        now = datetime.utcnow().isoformat() + "Z"
-        with self._get_connection() as conn:
-            conn.execute(
-                """
-                UPDATE issues SET
-                    policy_json = ?,
-                    decision = ?,
-                    updated_at = ?
-                WHERE id = ?
-                """,
-                (json.dumps(policy_dict), decision, now, issue_id),
-            )
-
-    def update_preparation_state(
-        self,
-        repo_full_name: str,
-        issue_number: int,
-        workspace_dir: str,
-        branch_name: str,
-        diff_summary: str,
-    ) -> None:
-        issue_id = f"{repo_full_name}#{issue_number}"
-        now = datetime.utcnow().isoformat() + "Z"
-        with self._get_connection() as conn:
-            conn.execute(
-                """
-                UPDATE issues SET
-                    workspace_dir = ?,
-                    branch_name = ?,
-                    diff_summary = ?,
-                    updated_at = ?
-                WHERE id = ?
-                """,
-                (workspace_dir, branch_name, diff_summary, now, issue_id),
-            )
-
-    def record_pr_submission(
-        self,
-        repo_full_name: str,
-        issue_number: int,
-        pr_url: str,
-    ) -> None:
-        now = datetime.utcnow()
-        today = now.strftime("%Y-%m-%d")
-        iso_now = now.isoformat() + "Z"
-        issue_id = f"{repo_full_name}#{issue_number}"
-        with self._get_connection() as conn:
-            conn.execute(
-                """
-                INSERT INTO pr_submissions (repo_full_name, issue_number, pr_url, submitted_date, submitted_at)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (repo_full_name, issue_number, pr_url, today, iso_now),
-            )
-            conn.execute(
-                """
-                UPDATE issues SET pr_url = ?, updated_at = ? WHERE id = ?
-                """,
-                (pr_url, iso_now, issue_id),
-            )
-
-    def get_pr_count_for_today(self) -> int:
-        today = date.today().strftime("%Y-%m-%d")
-        with self._get_connection() as conn:
-            row = conn.execute(
-                "SELECT COUNT(*) as cnt FROM pr_submissions WHERE submitted_date = ?",
-                (today,),
-            ).fetchone()
-            return int(row["cnt"]) if row else 0
-
     def get_issue(self, repo_full_name: str, issue_number: int) -> Optional[Dict[str, Any]]:
         issue_id = f"{repo_full_name}#{issue_number}"
         with self._get_connection() as conn:
@@ -258,20 +165,6 @@ class StateStore:
         with self._get_connection() as conn:
             rows = conn.execute("SELECT repo_full_name FROM repos").fetchall()
             return [row["repo_full_name"] for row in rows]
-
-    def get_top_contribute_issues(self, min_score: int = 60, limit: int = 10) -> List[Dict[str, Any]]:
-        with self._get_connection() as conn:
-            rows = conn.execute(
-                """
-                SELECT * FROM issues
-                WHERE (decision = 'CONTRIBUTE' OR decision = 'NEEDS_HUMAN' OR decision IS NULL)
-                  AND worth_score >= ?
-                ORDER BY worth_score DESC
-                LIMIT ?
-                """,
-                (min_score, limit),
-            ).fetchall()
-            return [dict(r) for r in rows]
 
     def save_checkpoint(self, stage_name: str, payload: Dict[str, Any]) -> None:
         now = datetime.utcnow().isoformat() + "Z"

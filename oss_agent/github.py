@@ -1,4 +1,3 @@
-import base64
 import json
 import logging
 import os
@@ -187,41 +186,6 @@ class GitHubClient:
                 pass
         return self._request_api("GET", f"repos/{owner}/{repo}")
 
-    def get_repo_file_content(self, owner: str, repo: str, file_path: str, branch: Optional[str] = None) -> Optional[str]:
-        """Fetch raw content of a repo file if present."""
-        params = {"ref": branch} if branch else {}
-        try:
-            data = self._request_api("GET", f"repos/{owner}/{repo}/contents/{file_path}", params=params)
-            if isinstance(data, dict) and data.get("encoding") == "base64" and "content" in data:
-                return base64.b64decode(data["content"]).decode("utf-8", errors="replace")
-            return None
-        except GitHubAPIError:
-            return None
-
-    def find_documentation_files(self, owner: str, repo: str) -> Dict[str, str]:
-        """Scan standard locations for CONTRIBUTING, CODE_OF_CONDUCT, templates."""
-        candidates = [
-            "CONTRIBUTING.md",
-            "contributing.md",
-            ".github/CONTRIBUTING.md",
-            "docs/CONTRIBUTING.md",
-            "CODE_OF_CONDUCT.md",
-            ".github/CODE_OF_CONDUCT.md",
-            ".github/pull_request_template.md",
-            ".github/PULL_REQUEST_TEMPLATE.md",
-            ".github/PULL_REQUEST_TEMPLATE/pull_request_template.md",
-            ".github/issue_template.md",
-            ".github/ISSUE_TEMPLATE.md",
-            "SECURITY.md",
-            "DCO",
-        ]
-        docs = {}
-        for candidate in candidates:
-            content = self.get_repo_file_content(owner, repo, candidate)
-            if content:
-                docs[candidate] = content
-        return docs
-
     def _fetch_issues_page(
         self,
         owner: str,
@@ -329,80 +293,4 @@ class GitHubClient:
         except Exception:
             return []
 
-    def fork_repository(self, owner: str, repo: str) -> Dict[str, Any]:
-        """Fork repository to user's authenticated account."""
-        if self.use_gh:
-            try:
-                res = self._run_gh_cli(["repo", "fork", f"{owner}/{repo}", "--clone=false"])
-                return {"success": True, "output": res}
-            except Exception as e:
-                logger.warning(f"gh repo fork failed: {e}")
-        return self._request_api("POST", f"repos/{owner}/{repo}/forks")
 
-    def create_pull_request(
-        self,
-        owner: str,
-        repo: str,
-        title: str,
-        body: str,
-        head: str,
-        base: str = "main",
-    ) -> Dict[str, Any]:
-        """Open a pull request from user fork/branch to upstream repo."""
-        if self.use_gh:
-            try:
-                args = [
-                    "pr", "create",
-                    "--repo", f"{owner}/{repo}",
-                    "--title", title,
-                    "--body", body,
-                    "--head", head,
-                    "--base", base,
-                ]
-                res = self._run_gh_cli(args)
-                return {"html_url": res if isinstance(res, str) else str(res), "title": title}
-            except Exception as e:
-                logger.warning(f"gh pr create failed, falling back to API: {e}")
-
-        payload = {"title": title, "body": body, "head": head, "base": base}
-        return self._request_api("POST", f"repos/{owner}/{repo}/pulls", json_data=payload)
-
-    def post_issue_comment(self, owner: str, repo: str, issue_number: int, comment: str) -> Dict[str, Any]:
-        if self.use_gh:
-            try:
-                self._run_gh_cli(["issue", "comment", str(issue_number), "--repo", f"{owner}/{repo}", "--body", comment])
-                return {"success": True}
-            except Exception:
-                pass
-        return self._request_api("POST", f"repos/{owner}/{repo}/issues/{issue_number}/comments", json_data={"body": comment})
-
-    def get_pull_request(self, owner: str, repo: str, pr_number: int) -> Dict[str, Any]:
-        return self._request_api("GET", f"repos/{owner}/{repo}/pulls/{pr_number}")
-
-    def get_pull_request_reviews(self, owner: str, repo: str, pr_number: int) -> List[Dict[str, Any]]:
-        return self._request_api("GET", f"repos/{owner}/{repo}/pulls/{pr_number}/reviews")
-
-    def get_pull_request_comments(self, owner: str, repo: str, pr_number: int) -> List[Dict[str, Any]]:
-        return self._request_api("GET", f"repos/{owner}/{repo}/pulls/{pr_number}/comments")
-
-    def get_combined_status(self, owner: str, repo: str, commit_sha: str) -> Dict[str, Any]:
-        try:
-            return self._request_api("GET", f"repos/{owner}/{repo}/commits/{commit_sha}/status")
-        except Exception:
-            return {"state": "unknown", "statuses": []}
-
-    def get_check_runs(self, owner: str, repo: str, commit_sha: str) -> List[Dict[str, Any]]:
-        try:
-            res = self._request_api("GET", f"repos/{owner}/{repo}/commits/{commit_sha}/check-runs")
-            return res.get("check_runs", []) if isinstance(res, dict) else []
-        except Exception:
-            return []
-
-    def get_user_open_prs(self, username: str) -> List[Dict[str, Any]]:
-        """Get open pull requests authored by username across GitHub."""
-        query = f"is:pr is:open author:{username} archived:false"
-        try:
-            res = self._request_api("GET", "search/issues", params={"q": query, "per_page": 20})
-            return res.get("items", []) if isinstance(res, dict) else []
-        except Exception:
-            return []
