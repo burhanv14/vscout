@@ -27,18 +27,7 @@ excluded_repos_or_orgs:
 
 # Execution limits & thresholds
 max_candidates_per_run: 5
-max_open_prs_at_once: 2
-max_prs_per_day: 2
 worth_score_threshold: 65 # Drop issues evaluated below this score
-
-# Autonomous mode:
-# - 'suggest': Find, analyze, and present shortlisted issues with clear human steps
-# - 'prepare': Clone, implement, test, and self-review code into a ready branch
-# - 'submit': Push to fork and open PR (always guarded by explicit y/N confirmation)
-mode: "suggest"
-
-# Safety rule: Require interactive confirmation for all mutating actions (fork, push, comment, PR)
-require_confirmation: true
 
 # OpenCode Brain configuration
 opencode:
