@@ -1,43 +1,65 @@
 import json
 import logging
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
-from rich.console import Console
 
-from oss_agent.brain import LLMBrain
-from oss_agent.config import AppConfig, get_project_root, render_template
+from oss_agent.config import AppConfig, get_project_root
 from oss_agent.github import GitHubClient
 from oss_agent.state import StateStore
 
 logger = logging.getLogger("oss_agent.stage3")
-console = Console()
+console = None  # Console output handled by CLI/MCP layer
 
 
-class IssueTriageResult(BaseModel):
-    status: Literal["available", "claimed", "pr_exists", "already_fixed", "stale", "unclear", "not_wanted"]
-    worth_score: int = Field(ge=0, le=100)
-    difficulty: str = Field(description="'beginner', 'intermediate', or 'advanced'")
-    estimated_hours: float
-    risks: List[str] = Field(default_factory=list)
-    reasoning: str
+class IssueAnalysisData(BaseModel):
+    """Structured issue context gathered for AI-client triage reasoning.
+
+    This contains all the raw data that was previously fed to the OpenCode
+    brain for worth-it analysis. The connected AI client is responsible for
+    interpreting this data and making the triage decision.
+    """
+
+    repo_full_name: str
+    issue_number: int
+    title: str
+    author: str
+    url: str
+    labels: List[str] = Field(default_factory=list)
+    assignees: List[str] = Field(default_factory=list)
+    body: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+    comments: List[Dict[str, Any]] = Field(default_factory=list)
+    timeline: List[Dict[str, Any]] = Field(default_factory=list)
+    pull_requests: List[Dict[str, Any]] = Field(default_factory=list)
+    commits: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class WorthItAnalysisStage:
-    """Stage 3: Deep dive into issue context, comments, PR cross-references, and code fixes."""
+    """Stage 3: Gather comprehensive issue context for AI-client triage.
 
-    def __init__(self, config: AppConfig, brain: LLMBrain, github: GitHubClient, state: StateStore):
+    This stage performs data gathering only (fetching issue details, comments,
+    timeline, linked PRs, and commits). Triage decisions (worth score, status,
+    difficulty) are left to the connected AI client via MCP tools.
+    """
+
+    def __init__(self, config: AppConfig, github: GitHubClient, state: StateStore):
         self.config = config
-        self.brain = brain
         self.github = github
         self.state = state
         self.root = get_project_root()
 
-    def analyze_issue(self, issue: Dict[str, Any]) -> IssueTriageResult:
+    def analyze_issue(self, issue: Dict[str, Any]) -> IssueAnalysisData:
+        """Gather all context for an issue without making an LLM triage decision.
+
+        Returns structured IssueAnalysisData that the connected AI client can
+        use to perform its own worth-it triage reasoning.
+        """
         full_name = issue["repo_full_name"]
         owner, repo_name = full_name.split("/", 1)
         issue_number = issue["issue_number"]
 
-        console.print(f"Analyzing [cyan]{full_name}#{issue_number}[/cyan]: {issue['title'][:60]}...")
+        logger.info(f"Gathering context for {full_name}#{issue_number}: {issue['title'][:60]}...")
 
         # 1. Fetch comments
         comments = self.github.get_issue_comments(owner, repo_name, issue_number)
@@ -85,27 +107,24 @@ class WorthItAnalysisStage:
             for c in commits
         ]
 
-        # Read prompt template
-        template = (self.root / "prompts" / "issue_triage.txt").read_text(encoding="utf-8")
-        prompt = render_template(
-            template,
+        analysis_data = IssueAnalysisData(
             repo_full_name=full_name,
-            issue_title=issue["title"],
             issue_number=issue_number,
-            issue_author=issue.get("author", "unknown"),
-            issue_created_at=issue.get("created_at", "unknown"),
-            issue_updated_at=issue.get("updated_at", "unknown"),
-            issue_labels=", ".join(issue.get("labels", [])),
-            issue_assignees=", ".join(a.get("login", "unknown") for a in issue.get("assignees", [])) or "None",
-            issue_body=issue.get("body", "(No description provided)"),
-            comments_and_timeline=json.dumps({"comments": formatted_comments, "timeline": formatted_timeline}, indent=2),
-            linked_prs_and_commits=json.dumps({"pull_requests": prs_summary, "commits": commits_summary}, indent=2),
-            code_search_findings=f"Commits found referencing #{issue_number}: {len(commits_summary)}",
-            user_tech_stack=", ".join(self.config.tech_stack),
+            title=issue["title"],
+            author=issue.get("author", "unknown"),
+            url=issue["url"],
+            labels=issue.get("labels", []),
+            assignees=[a.get("login", "unknown") for a in issue.get("assignees", []) if isinstance(a, dict)],
+            body=issue.get("body", "") or "",
+            created_at=issue.get("created_at", ""),
+            updated_at=issue.get("updated_at", ""),
+            comments=formatted_comments,
+            timeline=formatted_timeline,
+            pull_requests=prs_summary,
+            commits=commits_summary,
         )
 
-        result: IssueTriageResult = self.brain.think(prompt, schema=IssueTriageResult)  # type: ignore
-
+        # Persist raw analysis data (without LLM triage fields)
         self.state.save_issue_triage(
             repo_full_name=full_name,
             issue_number=issue_number,
@@ -113,45 +132,34 @@ class WorthItAnalysisStage:
             author=issue.get("author", "unknown"),
             url=issue["url"],
             labels=issue.get("labels", []),
-            status=result.status,
-            worth_score=result.worth_score,
-            difficulty=result.difficulty,
-            estimated_hours=result.estimated_hours,
-            risks=result.risks,
-            reasoning=result.reasoning,
+            status="gathered",
+            worth_score=0,
+            difficulty="unknown",
+            estimated_hours=0.0,
+            risks=[],
+            reasoning=json.dumps(analysis_data.model_dump(), default=str),
         )
 
-        return result
+        return analysis_data
 
     def run(self, issues: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        console.print("[bold cyan]Stage 3: Worth-It Analysis & Triage[/bold cyan]")
-        qualified_issues = []
+        """Gather context for all candidate issues.
+
+        Returns a list of issue entries with their gathered analysis data.
+        No filtering by worth score or status is performed here — those
+        decisions belong to the connected AI client.
+        """
+        logger.info(f"Stage 3: Gathering context for {len(issues)} issues.")
+        analyzed_issues = []
 
         for issue in issues:
             try:
-                triage = self.analyze_issue(issue)
-                issue_entry = {**issue, **triage.model_dump()}
-
-                if triage.worth_score < self.config.worth_score_threshold:
-                    console.print(
-                        f"[yellow]Dropped #{issue['issue_number']}: score {triage.worth_score} < threshold {self.config.worth_score_threshold}[/yellow]"
-                    )
-                    continue
-
-                if triage.status != "available":
-                    console.print(
-                        f"[yellow]Dropped #{issue['issue_number']}: status '{triage.status}' is not 'available'[/yellow]"
-                    )
-                    continue
-
-                console.print(
-                    f"[green]Qualified #{issue['issue_number']}[/green] (Score: {triage.worth_score}/100, Diff: {triage.difficulty}): {triage.reasoning[:80]}..."
-                )
-                qualified_issues.append(issue_entry)
-
+                analysis = self.analyze_issue(issue)
+                issue_entry = {**issue, **analysis.model_dump()}
+                analyzed_issues.append(issue_entry)
             except Exception as e:
-                logger.error(f"Error triaging issue #{issue.get('issue_number')}: {e}")
+                logger.error(f"Error gathering context for issue #{issue.get('issue_number')}: {e}")
 
-        self.state.save_checkpoint("stage3_qualified_issues", {"issues": qualified_issues})
-        console.print(f"[bold green]Stage 3 Complete: {len(qualified_issues)} high-worth candidate issues identified.[/bold green]")
-        return qualified_issues
+        self.state.save_checkpoint("stage3_analyzed_issues", {"issues": analyzed_issues})
+        logger.info(f"Stage 3 Complete: {len(analyzed_issues)} issues analyzed.")
+        return analyzed_issues
