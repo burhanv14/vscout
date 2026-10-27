@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "oss-contributor-agent"
-version = "0.1.0"
-description = "Autonomous CLI-driven open-source contributor agent powered by local OpenCode CLI"
+version = "0.2.0"
+description = "Standalone MCP server for open-source issue discovery and evaluation (model-independent, no OpenCode required)"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -14,7 +14,12 @@ dependencies = [
     "httpx>=0.27.0",
     "rich>=13.7.0",
     "pytest>=8.0.0",
+    "mcp>=1.0.0",
 ]
 
 [project.scripts]
 agent = "oss_agent.cli:main"
+vscout-mcp = "oss_agent.mcp_server:main"
+
+[tool.setuptools.packages.find]
+include = ["oss_agent*"]
