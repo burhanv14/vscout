@@ -233,3 +233,4 @@ logs/*.jsonl
 reports/*.md
 !reports/.gitkeep
 config.yaml
+opencode.json
