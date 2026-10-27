@@ -1,220 +1,292 @@
 # OSS-Contributor-Agent (`vscout`)
 
-> A local, CLI-driven autonomous agent that **finds and evaluates** appropriate open-source issues on GitHub — powered entirely by your local **OpenCode CLI**.
+> A **model-independent MCP server** that discovers and evaluates appropriate open-source issues on GitHub.
+> Connect it to any MCP-compatible AI client (Claude Code, OpenAI Codex, OpenCode, etc.).
+> No OpenCode instance, no LLM API key, no separate reasoning backend required.
 
-The agent discovers repositories matching your tech stack, finds unassigned candidate issues, runs worth-it triage, and audits contribution policies. It then presents a shortlist of issues that are appropriate to contribute to. It does **not** fork, implement, submit, or monitor pull requests — that remains in your hands.
+The agent discovers repositories matching your tech stack, finds unassigned candidate issues,
+and gathers comprehensive issue context (comments, timeline, linked PRs, commits).
+It does **not** fork, implement, submit, or monitor pull requests — that remains in your hands.
 
 ---
 
-## ⚡ Quick CLI Commands
+## Architecture
 
-Get started immediately with the command-line shortcuts:
+The agent follows a clean separation between the MCP server and the underlying Python logic:
+
+```
+AI Client (Claude Code / Codex / OpenCode / Other)
+        |  LLM reasoning and tool selection
+        |  MCP protocol (stdio)
+        v
+Python MCP Server (vscout-mcp)
+        |
+        v
+Existing Python Logic (GitHub API, SQLite state, etc.)
+        |
++-------+-------+-------+
+|       |       |       |
+v       v       v       v
+discover_repositories  discover_issues  analyze_issue  get_state / get_capabilities
+        |
+        v
+Execution Results (structured JSON)
+        |
+        v
+AI Client (interprets results, applies reasoning)
+```
+
+The connected AI client is responsible for deciding which MCP tools to invoke
+and interpreting their results. The Python MCP server is responsible for
+exposing the tools, validating inputs, executing operations, and returning results.
+
+**No OpenCode instance is required.** **No LLM API key is required.**
+
+---
+
+## MCP Tools Exposed
+
+| Tool | Description |
+|------|-------------|
+| `discover_repositories` | Search GitHub for public repositories matching your tech stack. Returns candidate repos with stars, language, open issues, etc. |
+| `discover_issues` | Find unassigned candidate issues with preferred labels across repositories. |
+| `analyze_issue` | Gather comprehensive context for a specific issue: details, comments, timeline, linked PRs, referencing commits. |
+| `get_capabilities` | List all available MCP tools with descriptions and input schemas. |
+| `get_state` | Inspect the persistent state store (evaluated repos, analyzed issues, checkpoints). |
+
+All tools return structured JSON results. Input validation is performed before execution.
+Errors are returned as MCP `isError` responses.
+
+---
+
+## Quick Start
+
+### 1. Install
 
 ```powershell
-# 1. Run the full discovery pipeline (Stage 1 to Stage 3) and present appropriate issues
-python agent.py run
-
-# 2. Discover matching repositories and unassigned candidate issues (Stages 1-2)
-python agent.py discover
-
-# 3. Evaluate whether a specific issue is appropriate to contribute to (Stages 3-4)
-python agent.py analyze https://github.com/owner/repo/issues/123
+pip install -r requirements.txt
+# or install the package (provides both `agent` and `vscout-mcp` entry points):
+pip install -e .
 ```
 
-# Global Flags:
+### 2. Configure
+
+Copy the example config and add your GitHub token (optional if you use `gh` CLI):
+
 ```powershell
-python agent.py --help             # Show usage help
-python agent.py --config custom.yaml  # Specify alternative config file
+cp .env.example .env
+cp config.example.yaml config.yaml
+# Edit config.yaml to set your tech_stack, github.username, etc.
+# Edit .env to set GITHUB_TOKEN if needed
 ```
 
----
+### 3. Start the MCP Server
 
-## 📋 Prerequisites
-
-Before running the agent, make sure your local environment meets the following requirements:
-
-### 1. Python 3.10+
-- Python 3.10, 3.11, 3.12, 3.13, or 3.14 (tested with Python 3.14).
-- Verify in your terminal:
-  ```powershell
-  python --version
-  ```
-
-### 2. Local OpenCode CLI
-The agent uses your locally installed `opencode` CLI as its reasoning engine. No cloud API keys or external LLM SDKs are required.
-- Verify that `opencode` is installed:
-  ```powershell
-  opencode --version
-  opencode run --help
-  ```
-- **Verified flags utilized by this agent**:
-  - `--format json`: Formats model output as JSON.
-  - `--model <provider/model#variant>`: Sets a specific model variant (optional, configured in `config.yaml`).
-  - `--server <url>`: Connects to a persistent background server if using `opencode serve`.
-  - `--auto`: Auto-approves permissions for automated non-interactive execution.
-- **Windows npm / pnpm Auto-Resolution**: The agent automatically resolves `opencode.cmd` located in `%APPDATA%\npm`, `%LOCALAPPDATA%\pnpm`, or your system `PATH`. You can also configure an explicit binary path using `opencode.opencode_path` in `config.yaml`.
-- **Optional (Zero Cold Starts)**: Run `opencode serve --port 4096` in a background terminal, and set `backend: "server"` with `server_url: "http://localhost:4096"` in `config.yaml`.
-
-### 3. Git
-- Git must be installed.
-- Verify:
-  ```powershell
-  git --version
-  ```
-
-### 4. GitHub Access
-The agent supports two authentication methods (preferring `gh` CLI):
-- **Option A: GitHub CLI (`gh`) [Recommended]**
-  - Verify with:
-    ```powershell
-    gh auth status
-    ```
-- **Option B: GitHub Personal Access Token**
-  - Generate a classic or fine-grained token with `repo` permissions.
-  - Place it in your local `.env` file as `GITHUB_TOKEN=ghp_...`.
-
----
-
-## 📖 How to Use
-
-Follow this step-by-step workflow to find and evaluate appropriate open-source issues.
-
-### Step 1: Clone and Install Dependencies
 ```powershell
-cd "C:\Users\Burhan Vora\Desktop\Projects\vscout"
-python -m pip install -r requirements.txt
+vscout-mcp
 ```
 
-### Step 2: Configure Environment and Settings
-1. Create your local `.env` file from the example:
-   ```powershell
-   cp .env.example .env
-   ```
-   Add your GitHub token (if not using `gh` CLI):
-   ```env
-   GITHUB_TOKEN=ghp_your_github_token_here
-   ```
+The server communicates over **stdio** (JSON-RPC). Connect your AI client using
+the client-specific configurations below.
 
-2. Review and edit `config.yaml`:
-   ```yaml
-   tech_stack:
-     - python
-     - fastapi
-     - typescript
-     - react
+---
 
-   experience_level: "intermediate"
-   preferred_labels:
-     - "good first issue"
-     - "help wanted"
-     - "bug"
+## Client Integration
 
-   min_repo_stars: 50
-   max_repo_stars: 25000
-   worth_score_threshold: 65
+### Claude Code
 
-   github:
-     username: "your_github_username"
-   ```
+Add to your Claude Code MCP configuration (typically `~/.claude.json` or
+the project's `.mcp.json`):
 
-### Step 3: Run the Discovery Pipeline (`python agent.py run`)
-Run the end-to-end discovery pipeline through Stages 1 to 3:
+```json
+{
+  "mcpServers": {
+    "vscout": {
+      "command": "vscout-mcp",
+      "args": []
+    }
+  }
+}
+```
+
+Or using the full path to the Python executable:
+
+```json
+{
+  "mcpServers": {
+    "vscout": {
+      "command": "C:\\Users\\Burhan Vora\\AppData\\Roaming\\Python\\Python314\\Scripts\\vscout-mcp.exe",
+      "args": []
+    }
+  }
+}
+```
+
+### OpenAI Codex
+
+Register the MCP server with Codex:
+
+```bash
+codex mcp add vscout vscout-mcp
+```
+
+Or via the Codex MCP configuration file:
+
+```json
+{
+  "mcpServers": {
+    "vscout": {
+      "command": "vscout-mcp",
+      "args": []
+    }
+  }
+}
+```
+
+### OpenCode
+
+Add to your OpenCode MCP server configuration:
+
+```json
+{
+  "mcpServers": {
+    "vscout": {
+      "command": "vscout-mcp",
+      "args": [],
+      "transport": "stdio"
+    }
+  }
+}
+```
+
+---
+
+## CLI Interface
+
+The original CLI is retained and shares the same underlying Python logic:
+
 ```powershell
-python agent.py run
-```
-The agent will:
-1. Search GitHub for active repositories matching your `tech_stack` and activity filters.
-2. Evaluate repo health and fit with OpenCode.
-3. Fetch candidate open issues with preferred labels (skipping assigned issues).
-4. Run deep worth-it analysis: gathering timeline events, linked PRs, commits, and claim status.
-5. Present a ranked shortlist of appropriate issues.
+# Discover repositories and candidate issues
+agent discover
 
-### Step 4: Evaluate a Specific Issue (`python agent.py analyze`)
-To evaluate a single issue in depth:
-```powershell
-python agent.py analyze https://github.com/owner/repo/issues/123
+# Gather context for a specific issue
+agent analyze https://github.com/owner/repo/issues/123
+
+# Run the full discovery pipeline (Stages 1-3, data gathering only)
+agent run
+
+# Specify an alternative config file
+agent --config custom.yaml run
 ```
-The agent prints a verdict (APPROPRIATE / NOT APPROPRIATE) along with worth score, issue status, and reasoning.
+
+**Note:** The CLI no longer performs LLM-based repo ranking or issue triage.
+Those reasoning tasks are handled by an AI client connected via MCP. The CLI
+performs data gathering only (search, filter, context collection).
 
 ---
 
-## 🏛️ Architecture Overview
+## Configuration
 
-All reasoning (repo ranking and issue triage) is handled by your local `opencode` CLI.
+### `config.yaml`
 
-```mermaid
-flowchart TD
-    subgraph Discovery ["Stage 1 & 2. Discovery"]
-        S1["Stage 1: Repo Discovery<br/>(GitHub API/gh + Tech Stack Filter)"]
-        S2["Stage 2: Issue Discovery<br/>(Labels, Unassigned, Active)"]
-        S1 --> S2
-    end
+| Key | Description | Default |
+|-----|-------------|---------|
+| `tech_stack` | List of technologies to match against repositories | `["python", "typescript"]` |
+| `experience_level` | Contributor experience level | `"intermediate"` |
+| `preferred_labels` | GitHub labels to filter issues by | `["good first issue", "help wanted", "bug", "docs"]` |
+| `min_repo_stars` | Minimum repository stars | `50` |
+| `max_repo_stars` | Maximum repository stars | `25000` |
+| `min_recent_activity_days` | Repo must have activity within N days | `30` |
+| `excluded_repos_or_orgs` | Repos/orgs to skip | `[]` |
+| `max_candidates_per_run` | Max candidates per discovery run | `5` |
+| `worth_score_threshold` | Threshold for issue worth score (used by AI client) | `65` |
+| `github.username` | Your GitHub username | `""` |
+| `github.gh_path` | Path to `gh` binary (optional) | `""` |
+| `github.prefer_gh_cli` | Prefer `gh` CLI over REST API | `true` |
+| `git.author_name` | Git author name | `"OSS Contributor"` |
+| `git.author_email` | Git author email | `"contributor@example.com"` |
+| `sandbox.mode` | Sandbox execution mode (`auto`, `docker`, `venv`) | `"auto"` |
+| `sandbox.timeout_seconds` | Sandbox command timeout | `120` |
 
-    subgraph Evaluation ["Stage 3. Triage"]
-        S3["Stage 3: Worth-It Analysis<br/>(Timeline, PRs, Commits, Claim Heuristics)"]
-        S2 --> S3
-    end
+### Environment Variables (`.env`)
 
-    subgraph Output ["Shortlist"]
-        RPT["Ranked Shortlist of Appropriate Issues"]
-        S3 --> RPT
-    end
+| Variable | Description |
+|----------|-------------|
+| `GITHUB_TOKEN` | GitHub Personal Access Token (used if `gh` CLI is unavailable) |
 
-    subgraph Persistence ["Persistence & Logging"]
-        DB[("SQLite State Store<br/>state/pipeline.db")]
-        LOGS["Brain Call Logs<br/>logs/brain_calls.jsonl"]
-    end
+No OpenCode or LLM API environment variables are needed.
 
-    S1 -.-> DB
-    S3 -.-> DB
+---
+
+## Security Considerations
+
+- The agent only reads public GitHub data. It never forks, clones, pushes, or opens Pull Requests.
+- The `GITHUB_TOKEN` (if provided) is used only for GitHub API authentication. It is never transmitted to any LLM provider.
+- The MCP server communicates over stdio only — no network server is opened.
+- Tool inputs are validated before execution. Malformed inputs return structured error responses.
+
+---
+
+## Troubleshooting
+
+| Issue | Solution |
+|-------|----------|
+| `vscout-mcp` not found | Ensure `pip install -e .` was run successfully. The script installs to your Python Scripts directory. |
+| No repositories found | Check your `tech_stack`, `min_repo_stars`, and `max_repo_stars` in `config.yaml`. Verify GitHub API access (gh auth or GITHUB_TOKEN). |
+| GitHub API rate limit errors | Authenticate with `gh auth login` or set `GITHUB_TOKEN` in `.env`. |
+| Tool returns `isError: true` | Check the error message in the response. Common causes: invalid issue URL format, network issues, rate limiting. |
+| MCP client can't connect | Ensure `vscout-mcp` is on your system PATH. Verify the client configuration points to the correct executable. |
+
+---
+
+## Project Layout
+
 ```
-
----
-
-## 🛡️ Safety Rules & Guardrails
-
-- **Discovery only**: The agent never forks, clones, pushes, or opens Pull Requests. It only reads public GitHub data and evaluates issues.
-- **No duplicate effort**: Skips issues that are assigned, locked, or already have linked PRs.
-
----
-
-## 🗂️ Project Layout
-
-```text
 vscout/
-├── .env.example                 # Template for GitHub token and server config
+├── .env.example                 # Template for GitHub token
 ├── config.example.yaml          # Sample configuration template
-├── pyproject.toml               # Package specifications
-├── requirements.txt             # Python dependencies
+├── pyproject.toml               # Package specifications (defines `agent` and `vscout-mcp` scripts)
+├── requirements.txt             # Python dependencies (includes mcp SDK)
 ├── agent.py                     # Root CLI entrypoint
-├── prompts/                     # Tunable prompt templates
-│   ├── repo_ranker.txt          # Repo health and fit evaluation
-│   └── issue_triage.txt         # Worth-it analysis schema
-├── state/                       # SQLite resumable pipeline database (state/pipeline.db)
-├── logs/                        # OpenCode call logs (logs/brain_calls.jsonl)
+├── README.md                    # This file
+├── config.yaml                  # User configuration (created from config.example.yaml)
+├── .env                         # Environment variables (created from .env.example)
 ├── oss_agent/
 │   ├── cli.py                   # Command-line entrypoint & routing
-│   ├── config.py                # Pydantic configuration & safe template renderer
-│   ├── brain.py                 # LLMBrain calling local opencode CLI with 3x retry loop
-│   ├── github.py                # Dual gh CLI & REST/GraphQL API client
+│   ├── config.py                # Pydantic configuration & template renderer
+│   ├── github.py                # GitHub API client (gh CLI + REST)
 │   ├── state.py                 # SQLite persistent state store
+│   ├── mcp_server.py            # MCP server (stdio transport, tool definitions)
+│   ├── sandbox.py               # Sandbox execution (Docker/venv)
 │   └── stages/
-│       ├── stage1_repo_discovery.py
-│       ├── stage2_issue_discovery.py
-│       └── stage3_worth_it.py
-└── tests/
-    ├── test_brain.py            # Mocked OpenCode subprocess, validation, 3x retry
-    └── test_issue_status.py     # Claim detection, linked PRs, worth-score drops
+│       ├── stage1_repo_discovery.py   # Repository discovery (data gathering only)
+│       ├── stage2_issue_discovery.py  # Issue discovery (no LLM needed)
+│       └── stage3_worth_it.py         # Issue context gathering (no LLM triage)
+├── prompts/
+│   ├── repo_ranker.txt          # Prompt template (retained for reference)
+│   └── issue_triage.txt         # Prompt template (retained for reference)
+├── state/                       # SQLite state database
+├── logs/                        # Application logs
+├── tests/
+│   ├── test_issue_status.py     # Stage 3 tests (no OpenCode mocks)
+│   └── test_mcp_protocol.py     # End-to-end MCP protocol tests
+└── workspaces/                  # Sandbox workspaces
 ```
 
 ---
 
-## 🧪 Running Tests
-
-Execute the unit test suite using `pytest`:
+## Running Tests
 
 ```powershell
 python -m pytest -v
 ```
 
-Tests validate OpenCode subprocess execution and JSON parsing, and issue triage heuristics.
+Tests validate:
+- MCP server initialization and tool discovery
+- Tool input validation and error handling
+- Structured result serialization
+- Repeated request handling
+- stdout contains only MCP protocol messages
+- Original CLI continues to work
+- No OpenCode instance required
+- No LLM API key required

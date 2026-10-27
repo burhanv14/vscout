@@ -3,18 +3,13 @@ import re
 import sys
 from pathlib import Path
 from typing import Optional, Tuple
-from rich.console import Console
-from rich.table import Table
 
-from oss_agent.brain import LLMBrain
 from oss_agent.config import AppConfig, load_config
 from oss_agent.github import GitHubClient
 from oss_agent.state import StateStore
 from oss_agent.stages.stage1_repo_discovery import RepoDiscoveryStage
 from oss_agent.stages.stage2_issue_discovery import IssueDiscoveryStage
 from oss_agent.stages.stage3_worth_it import WorthItAnalysisStage
-
-console = Console()
 
 
 def parse_issue_url(url_or_identifier: str) -> Tuple[str, int]:
@@ -48,34 +43,41 @@ class AgentApp:
 
     Finds and evaluates appropriate open-source issues to work on.
     Does not fork, implement, submit, or monitor contributions.
+
+    Note: The previous OpenCode-based reasoning (repo ranking and issue
+    triage) has been removed. The CLI now performs data gathering only.
+    Reasoning (ranking, triage) is the responsibility of an AI client
+    connected via MCP.
     """
 
     def __init__(self, config_path: Optional[Path] = None):
         self.config = load_config(config_path)
         self.state = StateStore()
-        self.brain = LLMBrain(self.config)
         self.github = GitHubClient(self.config)
 
     def cmd_discover(self) -> None:
-        console.print("[bold blue]Starting Repository & Issue Discovery (Stage 1-2)...[/bold blue]")
-        stage1 = RepoDiscoveryStage(self.config, self.brain, self.github, self.state)
+        """Run Stage 1-2: discover repositories and candidate issues (data gathering only)."""
+        print("Starting Repository & Issue Discovery (Stage 1-2)...")
+
+        stage1 = RepoDiscoveryStage(self.config, self.github, self.state)
         ranked_repos = stage1.run()
         if not ranked_repos:
+            print("No candidate repositories found matching criteria.")
             return
 
         stage2 = IssueDiscoveryStage(self.config, self.github, self.state)
         candidate_issues = stage2.run(ranked_repos)
         if not candidate_issues:
+            print("No unassigned candidate issues found.")
             return
 
-        console.print(
-            f"[bold green]Discovery complete.[/bold green] Found {len(candidate_issues)} candidate issues. "
-            f"Run 'agent run' to evaluate them, or 'agent analyze <issue-url>' to evaluate a specific one."
-        )
+        print(f"Discovery complete. Found {len(candidate_issues)} candidate issues.")
+        print("Use 'agent run' to gather issue context, or 'agent analyze <issue-url>' to analyze a specific issue.")
 
     def cmd_analyze(self, issue_url: str) -> None:
+        """Run Stage 3 data gathering for a specific issue."""
         repo_full_name, issue_number = parse_issue_url(issue_url)
-        console.print(f"[bold blue]Analyzing {repo_full_name}#{issue_number}...[/bold blue]")
+        print(f"Analyzing {repo_full_name}#{issue_number}...")
 
         owner, repo_name = repo_full_name.split("/", 1)
         raw_issue = self.github.get_issue(owner, repo_name, issue_number)
@@ -93,32 +95,24 @@ class AgentApp:
             "updated_at": raw_issue.get("updated_at", ""),
         }
 
-        # Stage 3: Worth-it analysis
-        stage3 = WorthItAnalysisStage(self.config, self.brain, self.github, self.state)
-        triage = stage3.analyze_issue(issue_dict)
+        # Stage 3: Gather issue context (no LLM triage)
+        stage3 = WorthItAnalysisStage(self.config, self.github, self.state)
+        analysis = stage3.analyze_issue(issue_dict)
 
-        # Present findings
-        appropriate = (
-            triage.status == "available"
-            and triage.worth_score >= self.config.worth_score_threshold
-        )
-        status_color = "green" if appropriate else "red"
-
-        console.print(f"\n[{status_color}]Verdict: {'APPROPRIATE' if appropriate else 'NOT APPROPRIATE'}[/{status_color}]")
-        console.print(f"Repository: [cyan]{repo_full_name}[/cyan]")
-        console.print(f"Issue: [cyan]#{issue_number}[/cyan] - {issue_dict['title']}")
-        console.print(f"Worth score: [bold]{triage.worth_score}/100[/bold] (threshold: {self.config.worth_score_threshold})")
-        console.print(f"Issue status: [bold]{triage.status}[/bold]")
-        console.print(f"Reasoning: {triage.reasoning}")
-        console.print(f"Issue URL: [cyan]{issue_dict['url']}[/cyan]")
-
-        if appropriate:
-            console.print("[bold green]This issue looks appropriate to contribute to.[/bold green]")
-        else:
-            console.print("[bold yellow]This issue is not appropriate to pursue at this time.[/bold yellow]")
+        print(f"\nRepository: {repo_full_name}")
+        print(f"Issue: #{issue_number} - {issue_dict['title']}")
+        print(f"Issue URL: {issue_dict['url']}")
+        print(f"Labels: {', '.join(analysis.labels) or 'none'}")
+        print(f"Assignees: {', '.join(analysis.assignees) or 'none'}")
+        print(f"Comments: {len(analysis.comments)}")
+        print(f"Timeline events: {len(analysis.timeline)}")
+        print(f"Linked PRs: {len(analysis.pull_requests)}")
+        print(f"Referencing commits: {len(analysis.commits)}")
+        print("\nIssue context has been gathered. Use an MCP-connected AI client to perform triage reasoning.")
 
     def cmd_run(self) -> None:
-        console.print("[bold blue]Running discovery pipeline (Stage 1 to Stage 3)...[/bold blue]")
+        """Run full discovery pipeline (Stage 1 to Stage 3, data gathering only)."""
+        print("Running discovery pipeline (Stage 1 to Stage 3)...")
 
         # Progressive discovery: rotate Stage 1's sort/page each round so we surface
         # different valid repos each time, and keep searching until we find repos
@@ -129,10 +123,10 @@ class AgentApp:
 
         for round_idx in range(1, max_discovery_rounds + 1):
             # 1. Repo Discovery (cursor rotates each call -> different repos per round)
-            stage1 = RepoDiscoveryStage(self.config, self.brain, self.github, self.state)
+            stage1 = RepoDiscoveryStage(self.config, self.github, self.state)
             ranked_repos = stage1.run()
             if not ranked_repos:
-                console.print("[yellow]No candidate repositories found this round.[/yellow]")
+                print("No candidate repositories found this round.")
                 break
 
             # 2. Issue Discovery
@@ -141,55 +135,41 @@ class AgentApp:
             if candidate_issues:
                 break
 
-            console.print(
-                f"[yellow]Round {round_idx}: no unassigned issues found; rotating discovery search...[/yellow]"
-            )
+            print(f"Round {round_idx}: no unassigned issues found; rotating discovery search...")
 
         if not candidate_issues:
-            console.print("[yellow]No issues found after rotating discovery rounds.[/yellow]")
+            print("No issues found after rotating discovery rounds.")
             return
 
-        # 3. Worth-It Analysis
-        stage3 = WorthItAnalysisStage(self.config, self.brain, self.github, self.state)
-        qualified_issues = stage3.run(candidate_issues)
-        if not qualified_issues:
-            console.print("[yellow]No issues passed worth-it triage.[/yellow]")
+        # 3. Issue Context Gathering
+        stage3 = WorthItAnalysisStage(self.config, self.github, self.state)
+        analyzed_issues = stage3.run(candidate_issues)
+        if not analyzed_issues:
+            print("No issues could be analyzed.")
             return
 
-        # Present shortlist of appropriate issues
-        self._render_shortlist_table(qualified_issues)
+        self._render_shortlist_table(analyzed_issues)
 
     def _render_shortlist_table(self, items: list) -> None:
-        table = Table(title="[bold green]Appropriate Issues to Contribute To[/bold green]", show_header=True)
-        table.add_column("Rank", style="bold cyan", width=5)
-        table.add_column("Repository & Issue", style="white")
-        table.add_column("Score", style="bold green", width=7)
-        table.add_column("Status", style="magenta", width=12)
-        table.add_column("URL", style="cyan", no_wrap=True)
-
-        sorted_items = sorted(items, key=lambda x: x.get("worth_score", 0), reverse=True)
-        for idx, it in enumerate(sorted_items, 1):
+        print(f"\n{'='*60}")
+        print("Issues analyzed (context gathered for AI-client triage):")
+        print(f"{'='*60}")
+        for idx, it in enumerate(items, 1):
             full_name = it["repo_full_name"]
             number = it["issue_number"]
-            table.add_row(
-                str(idx),
-                f"{full_name} #{number}\n{it['title'][:50]}",
-                f"{it.get('worth_score', 0)}/100",
-                it.get("status", "available"),
-                it.get("url", ""),
-            )
+            print(f"{idx}. {full_name} #{number} - {it.get('title', '')[:60]}")
+            print(f"   URL: {it.get('url', '')}")
+            print(f"   Labels: {', '.join(it.get('labels', [])) or 'none'}")
+            print(f"   Comments: {len(it.get('comments', []))}, PRs: {len(it.get('pull_requests', []))}, Commits: {len(it.get('commits', []))}")
+            print()
 
-        console.print(table)
-        console.print(
-            f"\n[bold green]{len(items)} appropriate issue(s) identified.[/bold green] "
-            f"Review them and run 'agent analyze <issue-url>' to evaluate a specific one."
-        )
+        print(f"\n{len(items)} issue(s) analyzed. Review them with an MCP-connected AI client for triage.")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="agent",
-        description="OSS-Contributor-Agent: Finds and evaluates appropriate open-source issues (powered by OpenCode CLI)",
+        description="OSS-Contributor-Agent: Finds and evaluates appropriate open-source issues (MCP-enabled)",
     )
     parser.add_argument("--config", "-c", type=Path, default=None, help="Path to config.yaml")
 
@@ -199,11 +179,11 @@ def main() -> None:
     subparsers.add_parser("discover", help="Discover matching repositories and unassigned candidate issues")
 
     # agent analyze <issue-url>
-    p_analyze = subparsers.add_parser("analyze", help="Evaluate whether a specific issue is appropriate to contribute to")
+    p_analyze = subparsers.add_parser("analyze", help="Gather context for a specific issue (AI-client triage via MCP)")
     p_analyze.add_argument("issue_url", help="GitHub issue URL (e.g. https://github.com/owner/repo/issues/123)")
 
     # agent run
-    subparsers.add_parser("run", help="Run full discovery pipeline (Stages 1-3) and present appropriate issues")
+    subparsers.add_parser("run", help="Run full discovery pipeline (Stages 1-3) and gather issue context")
 
     args = parser.parse_args()
     app = AgentApp(config_path=args.config)
@@ -216,7 +196,7 @@ def main() -> None:
         elif args.command == "run":
             app.cmd_run()
     except Exception as e:
-        console.print(f"[bold red]Error:[/bold red] {e}")
+        print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
 
