@@ -5,15 +5,6 @@ import yaml
 from pydantic import BaseModel, Field
 
 
-class OpenCodeConfig(BaseModel):
-    backend: str = Field(default="cli", description="'cli' or 'server'")
-    server_url: str = Field(default="http://localhost:4096")
-    model: str = Field(default="", description="Provider/model#variant if set")
-    opencode_path: str = Field(default="", description="Optional path to opencode binary")
-    timeout_seconds: int = Field(default=180)
-    max_retries: int = Field(default=3)
-
-
 class GitHubConfig(BaseModel):
     username: str = Field(default="")
     gh_path: str = Field(default="", description="Optional path to gh binary")
@@ -44,7 +35,6 @@ class AppConfig(BaseModel):
     excluded_repos_or_orgs: List[str] = Field(default_factory=list)
     max_candidates_per_run: int = Field(default=5)
     worth_score_threshold: int = Field(default=65)
-    opencode: OpenCodeConfig = Field(default_factory=OpenCodeConfig)
     github: GitHubConfig = Field(default_factory=GitHubConfig)
     git: GitConfig = Field(default_factory=GitConfig)
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
@@ -98,9 +88,5 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
     env_token = os.getenv("GITHUB_TOKEN")
     if env_token:
         config.github.token = env_token
-
-    env_server = os.getenv("OPENCODE_SERVER_URL")
-    if env_server:
-        config.opencode.server_url = env_server
 
     return config

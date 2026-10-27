@@ -29,17 +29,6 @@ excluded_repos_or_orgs:
 max_candidates_per_run: 5
 worth_score_threshold: 65 # Drop issues evaluated below this score
 
-# OpenCode Brain configuration
-opencode:
-  # Backend: 'cli' (shell out to `opencode run`) or 'server' (`opencode run --server <url>`)
-  backend: "cli"
-  server_url: "http://localhost:4096"
-  # Model string format: provider/model#variant (leave empty to use OpenCode's default model)
-  model: ""
-  opencode_path: "" # Optional explicit path (auto-detects npm/pnpm/AppData/PATH if left empty)
-  timeout_seconds: 180
-  max_retries: 3
-
 # Contributor identity
 github:
   username: "burhanv14"
