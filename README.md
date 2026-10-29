@@ -1,8 +1,7 @@
 # OSS-Contributor-Agent (`vscout`)
 
 > A **model-independent MCP server** that discovers and evaluates appropriate open-source issues on GitHub.
-> Connect it to any MCP-compatible AI client (Claude Code, OpenAI Codex, OpenCode, etc.).
-> No OpenCode instance, no LLM API key, no separate reasoning backend required.
+> Connect it to any MCP-compatible AI client (Claude Code, OpenAI Codex, etc.).
 
 The agent discovers repositories matching your tech stack, finds unassigned candidate issues,
 and gathers comprehensive issue context (comments, timeline, linked PRs, commits).
@@ -15,7 +14,7 @@ It does **not** fork, implement, submit, or monitor pull requests — that remai
 The agent follows a clean separation between the MCP server and the underlying Python logic:
 
 ```
-AI Client (Claude Code / Codex / OpenCode / Other)
+AI Client (Claude Code / Codex / Other)
         |  LLM reasoning and tool selection
         |  MCP protocol (stdio)
         v
@@ -39,8 +38,6 @@ AI Client (interprets results, applies reasoning)
 The connected AI client is responsible for deciding which MCP tools to invoke
 and interpreting their results. The Python MCP server is responsible for
 exposing the tools, validating inputs, executing operations, and returning results.
-
-**No OpenCode instance is required.** **No LLM API key is required.**
 
 ---
 
@@ -88,6 +85,8 @@ vscout-mcp
 
 The server communicates over **stdio** (JSON-RPC). Connect your AI client using
 the client-specific configurations below.
+
+To stop the server, press `Ctrl+C` in the terminal where `vscout-mcp` is running.
 
 ---
 
@@ -143,22 +142,6 @@ Or via the Codex MCP configuration file:
 }
 ```
 
-### OpenCode
-
-Add to your OpenCode MCP server configuration:
-
-```json
-{
-  "mcpServers": {
-    "vscout": {
-      "command": "vscout-mcp",
-      "args": [],
-      "transport": "stdio"
-    }
-  }
-}
-```
-
 ---
 
 ## CLI Interface
@@ -179,9 +162,8 @@ agent run
 agent --config custom.yaml run
 ```
 
-**Note:** The CLI no longer performs LLM-based repo ranking or issue triage.
-Those reasoning tasks are handled by an AI client connected via MCP. The CLI
-performs data gathering only (search, filter, context collection).
+**Note:** The CLI performs data gathering only (search, filter, context collection).
+Reasoning tasks (ranking, triage) are handled by an AI client connected via MCP.
 
 ---
 
@@ -214,14 +196,12 @@ performs data gathering only (search, filter, context collection).
 |----------|-------------|
 | `GITHUB_TOKEN` | GitHub Personal Access Token (used if `gh` CLI is unavailable) |
 
-No OpenCode or LLM API environment variables are needed.
-
 ---
 
 ## Security Considerations
 
 - The agent only reads public GitHub data. It never forks, clones, pushes, or opens Pull Requests.
-- The `GITHUB_TOKEN` (if provided) is used only for GitHub API authentication. It is never transmitted to any LLM provider.
+- The `GITHUB_TOKEN` (if provided) is used only for GitHub API authentication.
 - The MCP server communicates over stdio only — no network server is opened.
 - Tool inputs are validated before execution. Malformed inputs return structured error responses.
 
@@ -260,15 +240,15 @@ vscout/
 │   ├── sandbox.py               # Sandbox execution (Docker/venv)
 │   └── stages/
 │       ├── stage1_repo_discovery.py   # Repository discovery (data gathering only)
-│       ├── stage2_issue_discovery.py  # Issue discovery (no LLM needed)
-│       └── stage3_worth_it.py         # Issue context gathering (no LLM triage)
+│       ├── stage2_issue_discovery.py  # Issue discovery
+│       └── stage3_worth_it.py         # Issue context gathering
 ├── prompts/
 │   ├── repo_ranker.txt          # Prompt template (retained for reference)
 │   └── issue_triage.txt         # Prompt template (retained for reference)
 ├── state/                       # SQLite state database
 ├── logs/                        # Application logs
 ├── tests/
-│   ├── test_issue_status.py     # Stage 3 tests (no OpenCode mocks)
+│   ├── test_issue_status.py     # Stage 3 tests
 │   └── test_mcp_protocol.py     # End-to-end MCP protocol tests
 └── workspaces/                  # Sandbox workspaces
 ```
@@ -288,5 +268,4 @@ Tests validate:
 - Repeated request handling
 - stdout contains only MCP protocol messages
 - Original CLI continues to work
-- No OpenCode instance required
-- No LLM API key required
+
