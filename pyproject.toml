@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "oss-contributor-agent"
 version = "0.2.0"
-description = "Standalone MCP server for open-source issue discovery and evaluation (model-independent, no OpenCode required)"
+description = "Standalone MCP server for open-source issue discovery and evaluation"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [

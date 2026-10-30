@@ -44,9 +44,8 @@ class AgentApp:
     Finds and evaluates appropriate open-source issues to work on.
     Does not fork, implement, submit, or monitor contributions.
 
-    Note: The previous OpenCode-based reasoning (repo ranking and issue
-    triage) has been removed. The CLI now performs data gathering only.
-    Reasoning (ranking, triage) is the responsibility of an AI client
+    Note: The CLI performs data gathering only (discovery and issue context
+    gathering). Reasoning (ranking, triage) is handled by an AI client
     connected via MCP.
     """
 
@@ -95,7 +94,7 @@ class AgentApp:
             "updated_at": raw_issue.get("updated_at", ""),
         }
 
-        # Stage 3: Gather issue context (no LLM triage)
+        # Stage 3: Gather issue context
         stage3 = WorthItAnalysisStage(self.config, self.github, self.state)
         analysis = stage3.analyze_issue(issue_dict)
 
