@@ -60,6 +60,7 @@ class GitHubClient:
         try:
             res = subprocess.run(
                 [self.gh_bin, "auth", "status"],
+                stdin=subprocess.DEVNULL,
                 capture_output=True,
                 text=True,
                 timeout=10,
@@ -123,7 +124,15 @@ class GitHubClient:
         cmd = [self.gh_bin] + args
         max_attempts = 3
         for attempt in range(1, max_attempts + 1):
-            res = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+            res = subprocess.run(
+                cmd,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=30,
+            )
             if res.returncode == 0:
                 stdout = res.stdout.strip()
                 if not stdout:
