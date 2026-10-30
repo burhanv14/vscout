@@ -14,9 +14,9 @@ console = None  # Console output handled by CLI/MCP layer
 class IssueAnalysisData(BaseModel):
     """Structured issue context gathered for AI-client triage reasoning.
 
-    This contains all the raw data that was previously fed to the OpenCode
-    brain for worth-it analysis. The connected AI client is responsible for
-    interpreting this data and making the triage decision.
+    This contains all the raw issue context for triage analysis. The connected
+    AI client is responsible for interpreting this data and making the triage
+    decision.
     """
 
     repo_full_name: str
@@ -50,7 +50,7 @@ class WorthItAnalysisStage:
         self.root = get_project_root()
 
     def analyze_issue(self, issue: Dict[str, Any]) -> IssueAnalysisData:
-        """Gather all context for an issue without making an LLM triage decision.
+        """Gather all context for an issue.
 
         Returns structured IssueAnalysisData that the connected AI client can
         use to perform its own worth-it triage reasoning.
@@ -124,7 +124,7 @@ class WorthItAnalysisStage:
             commits=commits_summary,
         )
 
-        # Persist raw analysis data (without LLM triage fields)
+        # Persist raw analysis data
         self.state.save_issue_triage(
             repo_full_name=full_name,
             issue_number=issue_number,
