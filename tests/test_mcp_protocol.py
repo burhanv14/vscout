@@ -247,3 +247,46 @@ async def test_mcp_stdout_contains_only_protocol_messages():
     # Every response parsed as valid JSON (otherwise _run_mcp_session would raise)
     assert all(r is not None for r in responses)
     assert all("jsonrpc" in r for r in responses)
+
+
+@pytest.mark.asyncio
+async def test_mcp_clean_shutdown_on_signal_while_stdin_open():
+    """Server exits promptly on SIGINT/CTRL_BREAK even when stdin remains open."""
+    import signal
+    import subprocess
+
+    creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-m",
+        "oss_agent.mcp_server",
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        creationflags=creationflags,
+    )
+
+    init_msg = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {"name": "test-client", "version": "1.0.0"},
+        },
+    }
+    proc.stdin.write((json.dumps(init_msg) + "\n").encode())
+    await proc.stdin.drain()
+    line = await asyncio.wait_for(proc.stdout.readline(), timeout=5.0)
+    assert line
+
+    # Send interrupt while proc.stdin is intentionally kept open (no EOF)
+    if sys.platform == "win32":
+        proc.send_signal(signal.CTRL_BREAK_EVENT)
+    else:
+        proc.send_signal(signal.SIGINT)
+
+    exit_code = await asyncio.wait_for(proc.wait(), timeout=3.0)
+    assert exit_code == 0
+    proc.stdin.close()

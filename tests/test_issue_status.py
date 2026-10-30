@@ -4,7 +4,7 @@ from oss_agent.stages.stage3_worth_it import WorthItAnalysisStage, IssueAnalysis
 
 
 def test_worth_it_analysis_gathers_issue_context():
-    """Verify that analyze_issue gathers all issue context without LLM triage."""
+    """Verify that analyze_issue gathers all issue context."""
     config = AppConfig()
 
     mock_github = MagicMock()
@@ -38,7 +38,7 @@ def test_worth_it_analysis_gathers_issue_context():
 
 
 def test_worth_it_analysis_returns_all_issues_no_filtering():
-    """Verify that run() returns all issues with context (no LLM-based filtering)."""
+    """Verify that run() returns all issues with context."""
     config = AppConfig()
 
     mock_github = MagicMock()
