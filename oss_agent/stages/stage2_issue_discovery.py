@@ -18,9 +18,17 @@ class IssueDiscoveryStage:
         self.github = github
         self.state = state
 
-    def run(self, repos: List[Dict[str, Any]], max_issues_per_repo: int = 5) -> List[Dict[str, Any]]:
+    def run(
+        self,
+        repos: List[Dict[str, Any]],
+        max_issues_per_repo: int = 5,
+        preferred_labels: List[str] | None = None,
+    ) -> List[Dict[str, Any]]:
         console.print("[bold cyan]Stage 2: Issue Discovery[/bold cyan]")
         all_candidate_issues = []
+
+        # Override config preferred_labels if an explicit set is provided at call time.
+        search_labels = preferred_labels if preferred_labels else self.config.preferred_labels
 
         for repo_info in repos:
             full_name = repo_info.get("repo_full_name") or repo_info.get("full_name")
@@ -33,7 +41,7 @@ class IssueDiscoveryStage:
                 raw_issues = self.github.get_issues(
                     owner=owner,
                     repo=repo_name,
-                    labels=self.config.preferred_labels,
+                    labels=search_labels,
                     limit=max_issues_per_repo * 3,
                 )
             except Exception as e:

@@ -1,10 +1,8 @@
 from datetime import datetime, timedelta
-import json
 import logging
-from pathlib import Path
 from typing import Any, Dict, List
 
-from oss_agent.config import AppConfig, get_project_root
+from oss_agent.config import AppConfig
 from oss_agent.github import GitHubClient
 from oss_agent.state import StateStore
 
@@ -32,9 +30,10 @@ class RepoDiscoveryStage:
         self.config = config
         self.github = github
         self.state = state
-        self.root = get_project_root()
 
-    def run(self, max_repos_to_rank: int = 6) -> List[Dict[str, Any]]:
+    def run(
+        self, max_repos_to_rank: int = 6, tech_stack: List[str] | None = None
+    ) -> List[Dict[str, Any]]:
         pushed_after = (datetime.utcnow() - timedelta(days=self.config.min_recent_activity_days)).strftime("%Y-%m-%d")
 
         # --- Progressive discovery cursor: rotate sort + page for variety ---
@@ -44,6 +43,9 @@ class RepoDiscoveryStage:
 
         excluded = {e.lower() for e in self.config.excluded_repos_or_orgs}
 
+        # Override config tech_stack if an explicit stack is provided at call time.
+        search_keywords = tech_stack if tech_stack else self.config.tech_stack
+
         # Search across pages/sort orders until we find enough valid candidates,
         # advancing the cursor past empty or unusable pages.
         filtered: List[Dict[str, Any]] = []
@@ -51,7 +53,7 @@ class RepoDiscoveryStage:
         while attempts < self.MAX_DISCOVERY_ATTEMPTS and not filtered:
             sort = self.DISCOVERY_SORTS[sort_index % len(self.DISCOVERY_SORTS)]
             candidates = self.github.search_repositories(
-                keywords=self.config.tech_stack,
+                keywords=search_keywords,
                 min_stars=self.config.min_repo_stars,
                 max_stars=self.config.max_repo_stars,
                 pushed_after_iso=pushed_after,
@@ -96,19 +98,6 @@ class RepoDiscoveryStage:
         if not filtered:
             logger.warning("No candidate repositories found matching criteria.")
             return []
-
-        repos_summary = []
-        for r in filtered:
-            repos_summary.append({
-                "full_name": r["full_name"],
-                "stars": r.get("stargazers_count", 0),
-                "forks": r.get("forks_count", 0),
-                "open_issues": r.get("open_issues_count", 0),
-                "language": r.get("language", ""),
-                "description": r.get("description", ""),
-                "updated_at": r.get("updated_at", ""),
-                "pushed_at": r.get("pushed_at", ""),
-            })
 
         ranked_list = []
         for r in filtered:
