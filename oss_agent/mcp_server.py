@@ -1,7 +1,7 @@
 """MCP server for the OSS-Contributor-Agent using FastMCP.
 
 Exposes the agent's issue discovery and evaluation capabilities as MCP tools
-over stdio transport. The connected AI client supplies the LLM and handles
+over HTTP transport. The connected AI client supplies the LLM and handles
 reasoning; this server executes operations and returns structured results.
 """
 
@@ -14,7 +14,6 @@ from typing import Any
 
 from fastmcp import FastMCP
 
-# Configure logging to stderr ONLY — stdout is reserved for MCP protocol messages.
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
@@ -400,113 +399,6 @@ def get_state(
 # Entry point
 # ---------------------------------------------------------------------------
 
-def _windows_ancestor_pids(max_depth: int = 4) -> list[int]:
-    """Return PIDs of this process's ancestors (parent, grandparent, ...).
-
-    The ``vscout-mcp`` console script is a launcher .exe that spawns the real
-    python.exe, so the direct parent is only a shim; the client/terminal that
-    actually dies is further up the chain. We watch every ancestor.
-    """
-    import ctypes
-    from ctypes import wintypes
-
-    class PROCESSENTRY32(ctypes.Structure):
-        _fields_ = [
-            ("dwSize", wintypes.DWORD),
-            ("cntUsage", wintypes.DWORD),
-            ("th32ProcessID", wintypes.DWORD),
-            ("th32DefaultHeapID", ctypes.c_size_t),
-            ("th32ModuleID", wintypes.DWORD),
-            ("cntThreads", wintypes.DWORD),
-            ("th32ParentProcessID", wintypes.DWORD),
-            ("pcPriClassBase", wintypes.LONG),
-            ("dwFlags", wintypes.DWORD),
-            ("szExeFile", ctypes.c_wchar * 260),
-        ]
-
-    kernel32 = ctypes.windll.kernel32
-    kernel32.CreateToolhelp32Snapshot.restype = ctypes.c_void_p
-    kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
-    kernel32.Process32FirstW.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
-    kernel32.Process32NextW.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
-    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
-
-    snap = kernel32.CreateToolhelp32Snapshot(0x2, 0)  # TH32CS_SNAPPROCESS
-    if not snap or snap == ctypes.c_void_p(-1).value:
-        return []
-    procs: dict[int, tuple[int, str]] = {}
-    try:
-        entry = PROCESSENTRY32()
-        entry.dwSize = ctypes.sizeof(PROCESSENTRY32)
-        ok = kernel32.Process32FirstW(snap, ctypes.byref(entry))
-        while ok:
-            procs[entry.th32ProcessID] = (entry.th32ParentProcessID, entry.szExeFile.lower())
-            ok = kernel32.Process32NextW(snap, ctypes.byref(entry))
-    finally:
-        kernel32.CloseHandle(snap)
-
-    # Never watch system/shell-root processes that outlive terminals.
-    ignore = {"explorer.exe", "services.exe", "wininit.exe", "winlogon.exe",
-              "svchost.exe", "csrss.exe", "smss.exe", "system"}
-    chain: list[int] = []
-    pid = os.getpid()
-    for _ in range(max_depth):
-        info = procs.get(pid)
-        if not info:
-            break
-        ppid = info[0]
-        pinfo = procs.get(ppid)
-        if not pinfo or pinfo[1] in ignore:
-            break
-        chain.append(ppid)
-        pid = ppid
-    return chain
-
-
-def _start_parent_watchdog() -> None:
-    """Exit this process when the client/terminal that launched it goes away.
-
-    stdio servers get orphaned when the terminal is closed without stdin
-    reaching EOF (notably on Windows, where a launcher shim sits between the
-    client and python.exe). A daemon thread waits for any ancestor to die and
-    then force-exits. It never reads stdin, so it can't steal protocol bytes.
-    """
-    import threading
-    import time
-
-    parent_pid = os.getppid()
-    if parent_pid <= 1:
-        return
-
-    def _watch() -> None:
-        try:
-            if sys.platform == "win32":
-                import ctypes
-
-                SYNCHRONIZE = 0x00100000
-                kernel32 = ctypes.windll.kernel32
-                kernel32.OpenProcess.restype = ctypes.c_void_p
-                handles = []
-                for pid in _windows_ancestor_pids() or [parent_pid]:
-                    h = kernel32.OpenProcess(SYNCHRONIZE, False, pid)
-                    if h:
-                        handles.append(h)
-                if not handles:
-                    return
-                arr = (ctypes.c_void_p * len(handles))(*handles)
-                # bWaitAll=False: wake as soon as ANY ancestor exits.
-                kernel32.WaitForMultipleObjects(len(handles), arr, False, 0xFFFFFFFF)
-            else:
-                while os.getppid() == parent_pid:
-                    time.sleep(1.0)
-        except Exception:
-            return
-        logger.info("Parent process exited; shutting down MCP server")
-        os._exit(0)
-
-    threading.Thread(target=_watch, name="parent-watchdog", daemon=True).start()
-
-
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
 
@@ -514,19 +406,17 @@ DEFAULT_PORT = 8000
 def main(argv: list[str] | None = None) -> None:
     """Entry point for the vscout-mcp console script.
 
-    Default transport is stdio (client launches the server). With ``--http`` the
-    server listens on ``http://HOST:PORT/mcp`` so it lives in the terminal that
-    started it and stops when that terminal closes.
+    Serves MCP over streamable HTTP at ``http://HOST:PORT/mcp``. This is the
+    only transport — stdio is not supported. All IDE/AI clients connect to the
+    HTTP endpoint.
 
     On Windows, installs a console control handler so that CTRL-C / CTRL-BREAK /
-    window close exits cleanly with code 0 (fastmcp does not install one itself).
-    On Unix, asyncio's default signal handling raises KeyboardInterrupt.
+    window close exits cleanly with code 0.
     """
     import argparse
+    import ctypes
 
     parser = argparse.ArgumentParser(prog="vscout-mcp")
-    parser.add_argument("--http", action="store_true",
-                        help="serve over streamable HTTP instead of stdio")
     parser.add_argument("--host", default=os.environ.get("VSCOUT_MCP_HOST", DEFAULT_HOST))
     parser.add_argument("--port", type=int,
                         default=int(os.environ.get("VSCOUT_MCP_PORT", DEFAULT_PORT)))
@@ -534,8 +424,6 @@ def main(argv: list[str] | None = None) -> None:
 
     if sys.platform == "win32":
         try:
-            import ctypes
-
             kernel32 = ctypes.windll.kernel32
 
             def _ctrl_handler(ctrl_type: int) -> bool:
@@ -549,15 +437,10 @@ def main(argv: list[str] | None = None) -> None:
         except Exception:
             logger.debug("Could not install Windows console control handler")
 
-    _start_parent_watchdog()
-
     try:
-        if args.http:
-            logger.info("Serving MCP over HTTP at http://%s:%s/mcp", args.host, args.port)
-            asyncio.run(server.run_http_async(
-                transport="http", host=args.host, port=args.port, show_banner=False))
-        else:
-            asyncio.run(server.run_stdio_async(show_banner=False))
+        logger.info("Serving MCP over HTTP at http://%s:%s/mcp", args.host, args.port)
+        asyncio.run(server.run_http_async(
+            transport="http", host=args.host, port=args.port, show_banner=False))
     except KeyboardInterrupt:
         logger.info("MCP server stopped by user")
     except Exception:

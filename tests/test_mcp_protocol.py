@@ -1,292 +1,86 @@
 """End-to-end MCP protocol tests.
 
-These tests spawn the MCP server as a subprocess and communicate over
-stdio using the JSON-RPC protocol, exactly as an MCP client would.
+These tests use FastMCP's in-process test client to communicate with the MCP
+server, exercising the same JSON-RPC tool protocol an IDE client would use.
 """
 
-import asyncio
 import json
-import sys
+
+from fastmcp.exceptions import ToolError
+
 import pytest
+from fastmcp import Client
 
-
-async def _run_mcp_session(messages):
-    """Send a list of JSON-RPC messages to the MCP server and return responses."""
-    proc = await asyncio.create_subprocess_exec(
-        sys.executable,
-        "-m",
-        "oss_agent.mcp_server",
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-
-    async def send(msg):
-        line = json.dumps(msg) + "\n"
-        proc.stdin.write(line.encode())
-        await proc.stdin.drain()
-
-    async def recv():
-        line = await proc.stdout.readline()
-        if not line:
-            return None
-        return json.loads(line.decode())
-
-    responses = []
-    for msg in messages:
-        await send(msg)
-        resp = await recv()
-        responses.append(resp)
-
-    proc.stdin.close()
-    await proc.wait()
-    return responses
+from oss_agent.mcp_server import server
 
 
 @pytest.mark.asyncio
 async def test_mcp_server_initializes():
     """Test 1: The MCP server initializes correctly."""
-    init_msg = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "initialize",
-        "params": {
-            "protocolVersion": "2024-11-05",
-            "capabilities": {},
-            "clientInfo": {"name": "test-client", "version": "1.0.0"},
-        },
-    }
-    responses = await _run_mcp_session([init_msg])
-    resp = responses[0]
-    assert resp is not None
-    assert resp.get("jsonrpc") == "2.0"
-    assert resp.get("id") == 1
-    result = resp.get("result", {})
-    assert "protocolVersion" in result
-    assert "capabilities" in result
-    assert "serverInfo" in result
+    async with Client(server) as client:
+        result = await client.call_tool("get_capabilities", {})
+        assert result is not None
+        assert not result.is_error
 
 
 @pytest.mark.asyncio
 async def test_mcp_tools_discovery():
     """Test 2: MCP clients can discover the registered tools."""
-    init_msg = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "initialize",
-        "params": {
-            "protocolVersion": "2024-11-05",
-            "capabilities": {},
-            "clientInfo": {"name": "test-client", "version": "1.0.0"},
-        },
-    }
-    list_msg = {
-        "jsonrpc": "2.0",
-        "id": 2,
-        "method": "tools/list",
-        "params": {},
-    }
-    responses = await _run_mcp_session([init_msg, list_msg])
-    tools_resp = responses[1]
-    assert tools_resp is not None
-    result = tools_resp.get("result", {})
-    tools = result.get("tools", [])
-    tool_names = [t["name"] for t in tools]
-    expected = {
-        "discover_repositories",
-        "discover_issues",
-        "analyze_issue",
-        "get_capabilities",
-        "get_state",
-    }
-    assert expected.issubset(set(tool_names)), f"Missing tools: {expected - set(tool_names)}"
-    # Verify each tool has a description and input_schema
-    for tool in tools:
-        assert "name" in tool
-        assert "description" in tool
-        assert "inputSchema" in tool
+    async with Client(server) as client:
+        tools = await client.list_tools()
+        tool_names = [t.name for t in tools]
+        expected = {
+            "discover_repositories",
+            "discover_issues",
+            "analyze_issue",
+            "get_capabilities",
+            "get_state",
+        }
+        assert expected.issubset(
+            set(tool_names)
+        ), f"Missing tools: {expected - set(tool_names)}"
+        for tool in tools:
+            assert tool.name
+            assert tool.description
+            assert tool.input_schema
 
 
 @pytest.mark.asyncio
 async def test_mcp_tool_input_validation():
     """Test 3: MCP tools validate their inputs."""
-    init_msg = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "initialize",
-        "params": {
-            "protocolVersion": "2024-11-05",
-            "capabilities": {},
-            "clientInfo": {"name": "test-client", "version": "1.0.0"},
-        },
-    }
-
-    # Call analyze_issue without required issue_url -> should return error
-    bad_call = {
-        "jsonrpc": "2.0",
-        "id": 2,
-        "method": "tools/call",
-        "params": {"name": "analyze_issue", "arguments": {}},
-    }
-    responses = await _run_mcp_session([init_msg, bad_call])
-    resp = responses[1]
-    result = resp.get("result", {})
-    # The tool handler should catch the missing argument and return an error
-    assert result.get("isError") is True or "error" in str(result.get("content", ""))
+    async with Client(server) as client:
+        # Call analyze_issue without required issue_url -> should return error
+        with pytest.raises(ToolError):
+            await client.call_tool("analyze_issue", {})
 
 
 @pytest.mark.asyncio
 async def test_mcp_get_capabilities_tool():
     """Test 4: get_capabilities tool executes successfully."""
-    init_msg = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "initialize",
-        "params": {
-            "protocolVersion": "2024-11-05",
-            "capabilities": {},
-            "clientInfo": {"name": "test-client", "version": "1.0.0"},
-        },
-    }
-    caps_msg = {
-        "jsonrpc": "2.0",
-        "id": 2,
-        "method": "tools/call",
-        "params": {"name": "get_capabilities", "arguments": {}},
-    }
-    responses = await _run_mcp_session([init_msg, caps_msg])
-    resp = responses[1]
-    result = resp.get("result", {})
-    assert not result.get("isError", False)
-    content = result.get("content", [])
-    assert len(content) > 0
-    text = content[0].get("text", "")
-    data = json.loads(text)
-    assert data.get("operation") == "get_capabilities"
-    assert len(data.get("tools", [])) == 5
+    async with Client(server) as client:
+        result = await client.call_tool("get_capabilities", {})
+        assert not result.is_error
+        text = result.content[0].text
+        data = json.loads(text)
+        assert data.get("operation") == "get_capabilities"
+        assert len(data.get("tools", [])) == 5
 
 
 @pytest.mark.asyncio
 async def test_mcp_unknown_tool_error():
     """Test 6: Errors are returned appropriately for unknown tools."""
-    init_msg = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "initialize",
-        "params": {
-            "protocolVersion": "2024-11-05",
-            "capabilities": {},
-            "clientInfo": {"name": "test-client", "version": "1.0.0"},
-        },
-    }
-    bad_msg = {
-        "jsonrpc": "2.0",
-        "id": 2,
-        "method": "tools/call",
-        "params": {"name": "nonexistent_tool", "arguments": {}},
-    }
-    responses = await _run_mcp_session([init_msg, bad_msg])
-    resp = responses[1]
-    result = resp.get("result", {})
-    assert result.get("isError") is True
+    async with Client(server) as client:
+        with pytest.raises(ToolError):
+            await client.call_tool("nonexistent_tool", {})
 
 
 @pytest.mark.asyncio
 async def test_mcp_repeated_requests():
     """Test 10: The application handles repeated requests correctly."""
-    init_msg = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "initialize",
-        "params": {
-            "protocolVersion": "2024-11-05",
-            "capabilities": {},
-            "clientInfo": {"name": "test-client", "version": "1.0.0"},
-        },
-    }
-    caps_msg = {
-        "jsonrpc": "2.0",
-        "id": 2,
-        "method": "tools/call",
-        "params": {"name": "get_capabilities", "arguments": {}},
-    }
-    # Send the same call twice
-    messages = [init_msg, caps_msg, caps_msg]
-    responses = await _run_mcp_session(messages)
-    assert len(responses) == 3
-    for resp in responses:
-        result = resp.get("result", {})
-        assert not result.get("isError", False)
+    async with Client(server) as client:
+        # Call get_capabilities twice
+        resp1 = await client.call_tool("get_capabilities", {})
+        resp2 = await client.call_tool("get_capabilities", {})
 
-
-@pytest.mark.asyncio
-async def test_mcp_stdout_contains_only_protocol_messages():
-    """Test 11: stdout contains only valid MCP protocol messages during stdio operation.
-
-    We verify this indirectly: the server logs to stderr, and our
-    stdout reads return valid JSON-RPC responses. If the server wrote
-    logs to stdout, JSON parsing would fail.
-    """
-    init_msg = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "initialize",
-        "params": {
-            "protocolVersion": "2024-11-05",
-            "capabilities": {},
-            "clientInfo": {"name": "test-client", "version": "1.0.0"},
-        },
-    }
-    list_msg = {
-        "jsonrpc": "2.0",
-        "id": 2,
-        "method": "tools/list",
-        "params": {},
-    }
-    responses = await _run_mcp_session([init_msg, list_msg])
-    # Every response parsed as valid JSON (otherwise _run_mcp_session would raise)
-    assert all(r is not None for r in responses)
-    assert all("jsonrpc" in r for r in responses)
-
-
-@pytest.mark.asyncio
-async def test_mcp_clean_shutdown_on_signal_while_stdin_open():
-    """Server exits promptly on SIGINT/CTRL_BREAK even when stdin remains open."""
-    import signal
-    import subprocess
-
-    creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
-    proc = await asyncio.create_subprocess_exec(
-        sys.executable,
-        "-m",
-        "oss_agent.mcp_server",
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        creationflags=creationflags,
-    )
-
-    init_msg = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "initialize",
-        "params": {
-            "protocolVersion": "2024-11-05",
-            "capabilities": {},
-            "clientInfo": {"name": "test-client", "version": "1.0.0"},
-        },
-    }
-    proc.stdin.write((json.dumps(init_msg) + "\n").encode())
-    await proc.stdin.drain()
-    line = await asyncio.wait_for(proc.stdout.readline(), timeout=5.0)
-    assert line
-
-    # Send interrupt while proc.stdin is intentionally kept open (no EOF)
-    if sys.platform == "win32":
-        proc.send_signal(signal.CTRL_BREAK_EVENT)
-    else:
-        proc.send_signal(signal.SIGINT)
-
-    exit_code = await asyncio.wait_for(proc.wait(), timeout=3.0)
-    assert exit_code == 0
-    proc.stdin.close()
+        for resp in (resp1, resp2):
+            assert not resp.is_error

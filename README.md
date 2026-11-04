@@ -44,7 +44,7 @@ LLM reasoning and decides which issues are worth working on.
 ```
 AI Client (Claude Code / Codex / OpenCode / Cursor / etc.)
         |  LLM reasoning and tool selection
-        |  MCP protocol (stdio or HTTP)
+        |  MCP protocol (HTTP)
         v
 Python MCP Server (vscout-mcp, powered by FastMCP)
         |
@@ -120,24 +120,13 @@ Without a token or `gh` auth, you'll hit unauthenticated GitHub API rate limits 
 
 ## Starting the MCP Server
 
-### Option 1: Terminal launcher (recommended for IDE connections)
-
-Open one of the platform terminal launchers. It starts the MCP server in a terminal window
-and shows its logs:
-
-| Platform | File | How to open |
-|----------|------|-------------|
-| Windows | `vscout.bat` | Double-click |
-| macOS | `vscout.command` | Double-click |
-| Linux | `vscout.sh` | Run `./vscout.sh` in a terminal |
-
-By default the launcher runs the server over **stdio** (the MCP client launches and owns
-the process). Press `Ctrl+C` or close the terminal window to stop the server.
-
-### Option 2: Standalone stdio mode
+`vscout` serves MCP exclusively over **streamable HTTP**. Start the server in a
+terminal window, then connect your IDE/AI client to the HTTP endpoint:
 
 ```powershell
-vscout-mcp
+vscout-mcp                  # http://127.0.0.1:8000/mcp
+vscout-mcp --port 9000      # custom port (or VSCOUT_MCP_PORT)
+vscout-mcp --host 0.0.0.0   # custom host (not recommended; see Security)
 ```
 
 or via Python:
@@ -146,100 +135,72 @@ or via Python:
 python -m oss_agent.mcp_server
 ```
 
-### Option 3: Standalone HTTP mode (for remote MCP clients)
+Logs are printed to the terminal (stderr). Press `Ctrl+C` or close the terminal
+window to stop the server. On Windows, closing the window triggers a clean exit.
 
-```powershell
-vscout-mcp --http                  # http://127.0.0.1:8000/mcp
-vscout-mcp --http --port 9000      # custom port (or VSCOUT_MCP_PORT / VSCOUT_MCP_HOST)
-vscout-mcp --http --host 0.0.0.0   # custom host (not recommended; see Security)
-```
+### Platform terminal launchers
 
-HTTP mode keeps the server alive in its own terminal. Close the terminal or press `Ctrl+C`
-to stop it. On Windows, closing the window triggers a clean exit via the console control handler.
+| Platform | File | How to open |
+|----------|------|-------------|
+| Windows | `vscout.bat` | Double-click |
+| macOS | `vscout.command` | Double-click |
+| Linux | `vscout.sh` | Run `./vscout.sh` in a terminal |
+
+Each launcher starts the HTTP server in its own terminal window, shows logs,
+and prompts for a GitHub token on the first run (if none is set).
 
 ---
 
 ## IDE / AI Client Integration
 
+All clients connect to the same HTTP endpoint:
+`http://127.0.0.1:8000/mcp` (or your configured host/port).
+
+Start the server first (`vscout-mcp`), then configure your client:
+
 ### Claude Code
 
-Add to your Claude Code MCP configuration (typically `~/.claude.json` or the project's
-`.mcp.json`):
+Add to your Claude Code MCP configuration (`~/.claude.json` or `.mcp.json`):
 
 ```json
 {
   "mcpServers": {
     "vscout": {
-      "command": "vscout-mcp",
-      "args": []
+      "type": "remote",
+      "url": "http://127.0.0.1:8000/mcp"
     }
   }
 }
 ```
-
-Or using the full path to the executable:
-
-```json
-{
-  "mcpServers": {
-    "vscout": {
-      "command": "C:\\Users\\Burhan Vora\\AppData\\Roaming\\Python\\Python314\\Scripts\\vscout-mcp.exe",
-      "args": []
-    }
-  }
-}
-```
-
-Claude Code launches `vscout-mcp` as a stdio subprocess and connects over the MCP protocol.
 
 ---
 
 ### OpenAI Codex
 
-Register the MCP server with Codex:
-
-```bash
-codex mcp add vscout vscout-mcp
-```
-
-Or via the Codex MCP configuration file:
+Register via the Codex MCP configuration file:
 
 ```json
 {
   "mcpServers": {
     "vscout": {
-      "command": "vscout-mcp",
-      "args": []
+      "type": "remote",
+      "url": "http://127.0.0.1:8000/mcp"
     }
   }
 }
 ```
 
-Codex launches `vscout-mcp` as a stdio subprocess.
+Or via CLI:
+
+```bash
+codex mcp add vscout --url http://127.0.0.1:8000/mcp
+```
 
 ---
 
 ### OpenCode
 
-OpenCode supports both local (stdio) and remote (HTTP) MCP servers.
-
-**Local (stdio)** — OpenCode launches the server itself:
-
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "mcp": {
-    "vscout": {
-      "type": "local",
-      "command": ["vscout-mcp"],
-      "enabled": true,
-      "environment": {}
-    }
-  }
-}
-```
-
-**Remote (HTTP)** — Start `vscout-mcp --http` in a terminal, then point OpenCode at it:
+Configure in `opencode.json` (already pre-configured at the repo root):
 
 ```json
 {
@@ -254,26 +215,11 @@ OpenCode supports both local (stdio) and remote (HTTP) MCP servers.
 }
 ```
 
-The `opencode.json` at the repo root is pre-configured for remote HTTP mode.
-
 ---
 
-### VS Code (via MCP-compatible extensions)
+### VS Code
 
-If your VS Code extension supports MCP (e.g. an MCP client extension), add:
-
-```json
-{
-  "mcpServers": {
-    "vscout": {
-      "command": "vscout-mcp",
-      "args": []
-    }
-  }
-}
-```
-
-Or for HTTP mode:
+Add to your VS Code MCP settings:
 
 ```json
 {
@@ -290,14 +236,14 @@ Or for HTTP mode:
 
 ### Cursor
 
-Add to your Cursor MCP settings (usually `~/.cursor/mcp.json` or the project's MCP config):
+Add to your Cursor MCP settings:
 
 ```json
 {
   "mcpServers": {
     "vscout": {
-      "command": "vscout-mcp",
-      "args": []
+      "type": "remote",
+      "url": "http://127.0.0.1:8000/mcp"
     }
   }
 }
@@ -307,10 +253,9 @@ Add to your Cursor MCP settings (usually `~/.cursor/mcp.json` or the project's M
 
 ### Generic MCP Clients
 
-Any MCP-compatible client can connect using either:
+Any MCP-compatible client can connect to:
 
-- **Stdio**: `"command": "vscout-mcp", "args": []` — client launches and owns the process
-- **HTTP**: Start `vscout-mcp --http`, then connect to `http://127.0.0.1:8000/mcp`
+`http://127.0.0.1:8000/mcp`
 
 ---
 
@@ -400,8 +345,8 @@ The `state/*.db` files are gitignored (local runtime state only).
 | Variable | Description |
 |----------|-------------|
 | `GITHUB_TOKEN` | GitHub Personal Access Token (used if `gh` CLI is unavailable) |
-| `VSCOUT_MCP_HOST` | Host for `--http` mode | `127.0.0.1` |
-| `VSCOUT_MCP_PORT` | Port for `--http` mode | `8000` |
+| `VSCOUT_MCP_HOST` | Host for HTTP mode | `127.0.0.1` |
+| `VSCOUT_MCP_PORT` | Port for HTTP mode | `8000` |
 
 ---
 
@@ -409,8 +354,7 @@ The `state/*.db` files are gitignored (local runtime state only).
 
 - The agent only reads public GitHub data. It never forks, clones, pushes, or opens Pull Requests.
 - The `GITHUB_TOKEN` (if provided) is used only for GitHub API authentication.
-- In stdio mode no network server is opened.
-- In `--http` mode the server binds to `127.0.0.1` only by default. Do not expose the port publicly — the endpoint has no authentication.
+- The server binds to `127.0.0.1` only by default. Do not expose the port publicly — the endpoint has no authentication.
 - Tool inputs are validated before execution. Malformed inputs return structured error responses.
 
 ---
@@ -449,7 +393,7 @@ vscout/
 │   ├── config.py                # Pydantic configuration & token setup
 │   ├── github.py                # GitHub API client (gh CLI + REST)
 │   ├── state.py                 # SQLite persistent state store
-│   ├── mcp_server.py            # MCP server (stdio/HTTP transport, tool definitions)
+│   ├── mcp_server.py            # MCP server (HTTP transport, tool definitions)
 │   ├── terminal_launcher.py     # Terminal launcher: token setup + server entrypoint
 │   └── stages/
 │       ├── stage1_repo_discovery.py   # Repository discovery (data gathering only)
