@@ -1,7 +1,7 @@
 # OSS-Contributor-Agent (`vscout`)
 
 > A **model-independent MCP server** that discovers and evaluates appropriate open-source issues on GitHub.
-> Connect it to any MCP-compatible AI client (Claude Code, OpenAI Codex, etc.).
+> Connect it to any MCP-compatible AI client (Claude Code, OpenAI Codex, OpenCode, Cursor, VS Code, etc.).
 
 The agent discovers repositories matching your tech stack, finds unassigned candidate issues,
 and gathers comprehensive issue context (comments, timeline, linked PRs, commits).
@@ -9,19 +9,47 @@ It does **not** fork, implement, submit, or monitor pull requests — that remai
 
 ---
 
+## Table of Contents
+
+1. [Overview](#overview)
+2. [Architecture](#architecture)
+3. [MCP Tools Exposed](#mcp-tools-exposed)
+4. [Installation](#installation)
+5. [First-Time Setup (GitHub Token)](#first-time-setup-github-token)
+6. [Starting the MCP Server](#starting-the-mcp-server)
+7. [IDE / AI Client Integration](#ide--ai-client-integration)
+8. [CLI Interface](#cli-interface)
+9. [Terminal Launchers](#terminal-launchers)
+10. [State Database (pipeline.db)](#state-database-pipelinedb)
+11. [Configuration Reference](#configuration-reference)
+12. [Security Considerations](#security-considerations)
+13. [Troubleshooting](#troubleshooting)
+14. [Project Layout](#project-layout)
+15. [Running Tests](#running-tests)
+
+---
+
+## Overview
+
+`vscout` is a standalone MCP server built with [FastMCP](https://github.com/jlowin/fastmcp)
+that helps you find good first issues and contribution-friendly repositories on GitHub.
+It performs **data gathering only** — searching repos, filtering issues, and collecting
+issue context. The connected AI client (Claude Code, Codex, OpenCode, etc.) supplies the
+LLM reasoning and decides which issues are worth working on.
+
+---
+
 ## Architecture
 
-The agent follows a clean separation between the MCP server and the underlying Python logic:
-
 ```
-AI Client (Claude Code / Codex / Other)
+AI Client (Claude Code / Codex / OpenCode / Cursor / etc.)
         |  LLM reasoning and tool selection
-        |  MCP protocol (stdio)
+        |  MCP protocol (stdio or HTTP)
         v
-Python MCP Server (vscout-mcp)
+Python MCP Server (vscout-mcp, powered by FastMCP)
         |
         v
-Existing Python Logic (GitHub API, SQLite state, etc.)
+Existing Python logic (GitHub API, SQLite state, etc.)
         |
 +-------+-------+-------+
 |       |       |       |
@@ -32,12 +60,12 @@ discover_repositories  discover_issues  analyze_issue  get_state / get_capabilit
 Execution Results (structured JSON)
         |
         v
-AI Client (interprets results, applies reasoning)
+AI Client (interprets results, applies triage reasoning)
 ```
 
-The connected AI client is responsible for deciding which MCP tools to invoke
-and interpreting their results. The Python MCP server is responsible for
-exposing the tools, validating inputs, executing operations, and returning results.
+The AI client decides which MCP tools to invoke and interprets their results.
+The Python MCP server exposes the tools, validates inputs, executes operations,
+and returns structured JSON results.
 
 ---
 
@@ -56,46 +84,87 @@ Errors are returned as MCP `isError` responses.
 
 ---
 
-## Quick Start
-
-### 1. Install
+## Installation
 
 ```powershell
 pip install -r requirements.txt
-# or install the package (provides both `agent` and `vscout-mcp` entry points):
+
+# Or install the package (provides both `agent` and `vscout-mcp` entry points):
 pip install -e .
 ```
 
-### 2. Configure
+Dependencies are listed in `requirements.txt` and include `fastmcp`, `httpx`, `pydantic`,
+`pyyaml`, `rich`, and `pytest`.
 
-Copy the example config and add your GitHub token (optional if you use `gh` CLI):
+---
+
+## First-Time Setup (GitHub Token)
+
+1. Copy the example config files:
 
 ```powershell
 cp .env.example .env
 cp config.example.yaml config.yaml
-# Edit config.yaml to set your tech_stack, github.username, etc.
-# Edit .env to set GITHUB_TOKEN if needed
 ```
 
-### 3. Start the MCP Server
+2. Edit `config.yaml` to set your `tech_stack`, `github.username`, and other preferences.
+
+3. Start the server. On the **first run**, if no `GITHUB_TOKEN` is found in `.env` or the
+   environment, you will be prompted to enter a GitHub Personal Access Token. It is saved to
+   `.env` so you are not asked again.
+
+A GitHub token is optional if you have the `gh` CLI authenticated (`gh auth login`).
+Without a token or `gh` auth, you'll hit unauthenticated GitHub API rate limits quickly.
+
+---
+
+## Starting the MCP Server
+
+### Option 1: Terminal launcher (recommended for IDE connections)
+
+Open one of the platform terminal launchers. It starts the MCP server in a terminal window
+and shows its logs:
+
+| Platform | File | How to open |
+|----------|------|-------------|
+| Windows | `vscout.bat` | Double-click |
+| macOS | `vscout.command` | Double-click |
+| Linux | `vscout.sh` | Run `./vscout.sh` in a terminal |
+
+By default the launcher runs the server over **stdio** (the MCP client launches and owns
+the process). Press `Ctrl+C` or close the terminal window to stop the server.
+
+### Option 2: Standalone stdio mode
 
 ```powershell
 vscout-mcp
 ```
 
-The server communicates over **stdio** (JSON-RPC). Connect your AI client using
-the client-specific configurations below.
+or via Python:
 
-To stop the server, press `Ctrl+C` in the terminal where `vscout-mcp` is running.
+```powershell
+python -m oss_agent.mcp_server
+```
+
+### Option 3: Standalone HTTP mode (for remote MCP clients)
+
+```powershell
+vscout-mcp --http                  # http://127.0.0.1:8000/mcp
+vscout-mcp --http --port 9000      # custom port (or VSCOUT_MCP_PORT / VSCOUT_MCP_HOST)
+vscout-mcp --http --host 0.0.0.0   # custom host (not recommended; see Security)
+```
+
+HTTP mode keeps the server alive in its own terminal. Close the terminal or press `Ctrl+C`
+to stop it. On Windows, closing the window triggers a clean exit via the console control handler.
 
 ---
 
-## Client Integration
+## IDE / AI Client Integration
 
 ### Claude Code
 
-Add to your Claude Code MCP configuration (typically `~/.claude.json` or
-the project's `.mcp.json`):
+Add to your Claude Code MCP configuration (typically `~/.claude.json` or the project's
+`.mcp.json`):
 
 ```json
 {
@@ -108,7 +177,7 @@ the project's `.mcp.json`):
 }
 ```
 
-Or using the full path to the Python executable:
+Or using the full path to the executable:
 
 ```json
 {
@@ -120,6 +189,10 @@ Or using the full path to the Python executable:
   }
 }
 ```
+
+Claude Code launches `vscout-mcp` as a stdio subprocess and connects over the MCP protocol.
+
+---
 
 ### OpenAI Codex
 
@@ -141,6 +214,103 @@ Or via the Codex MCP configuration file:
   }
 }
 ```
+
+Codex launches `vscout-mcp` as a stdio subprocess.
+
+---
+
+### OpenCode
+
+OpenCode supports both local (stdio) and remote (HTTP) MCP servers.
+
+**Local (stdio)** — OpenCode launches the server itself:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "vscout": {
+      "type": "local",
+      "command": ["vscout-mcp"],
+      "enabled": true,
+      "environment": {}
+    }
+  }
+}
+```
+
+**Remote (HTTP)** — Start `vscout-mcp --http` in a terminal, then point OpenCode at it:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "vscout": {
+      "type": "remote",
+      "url": "http://127.0.0.1:8000/mcp",
+      "enabled": true
+    }
+  }
+}
+```
+
+The `opencode.json` at the repo root is pre-configured for remote HTTP mode.
+
+---
+
+### VS Code (via MCP-compatible extensions)
+
+If your VS Code extension supports MCP (e.g. an MCP client extension), add:
+
+```json
+{
+  "mcpServers": {
+    "vscout": {
+      "command": "vscout-mcp",
+      "args": []
+    }
+  }
+}
+```
+
+Or for HTTP mode:
+
+```json
+{
+  "mcpServers": {
+    "vscout": {
+      "type": "remote",
+      "url": "http://127.0.0.1:8000/mcp"
+    }
+  }
+}
+```
+
+---
+
+### Cursor
+
+Add to your Cursor MCP settings (usually `~/.cursor/mcp.json` or the project's MCP config):
+
+```json
+{
+  "mcpServers": {
+    "vscout": {
+      "command": "vscout-mcp",
+      "args": []
+    }
+  }
+}
+```
+
+---
+
+### Generic MCP Clients
+
+Any MCP-compatible client can connect using either:
+
+- **Stdio**: `"command": "vscout-mcp", "args": []` — client launches and owns the process
+- **HTTP**: Start `vscout-mcp --http`, then connect to `http://127.0.0.1:8000/mcp`
 
 ---
 
@@ -167,7 +337,42 @@ Reasoning tasks (ranking, triage) are handled by an AI client connected via MCP.
 
 ---
 
-## Configuration
+## Terminal Launchers
+
+`vscout.bat` (Windows), `vscout.command` (macOS), and `vscout.sh` (Linux) are terminal
+launcher scripts. Double-clicking (Windows/macOS) or running (Linux) one opens a terminal
+window that:
+
+1. Prompts for and saves a GitHub token on the **first run** (if none is set).
+2. Starts the MCP server, printing its logs to the terminal.
+3. Keeps the server running until you press `Ctrl+C` or close the window.
+
+Use these when you want the MCP server running in its own terminal so an MCP client can
+connect to it. Close the window to stop the server.
+
+---
+
+## State Database (pipeline.db)
+
+`vscout` uses a SQLite database at `state/pipeline.db` to persist state across runs:
+
+| Table | Purpose |
+|-------|---------|
+| `repos` | Evaluated repository metadata (stars, language, health/fit scores, recommendation) |
+| `issues` | Issue triage data (status, worth score, difficulty, estimated hours, risks, reasoning) |
+| `checkpoints` | Pipeline stage checkpoints (resume cursor, discovered repos, analyzed issues) |
+
+The database is created automatically on first run — you do not need to create it manually.
+It enables:
+- **Resumable discovery** — the pagination cursor persists between runs
+- **Cross-stage state** — the `run` command carries results from Stage 1 → 2 → 3
+- **`get_state` MCP tool** — lets an AI client inspect what has been discovered so far
+
+The `state/*.db` files are gitignored (local runtime state only).
+
+---
+
+## Configuration Reference
 
 ### `config.yaml`
 
@@ -195,6 +400,8 @@ Reasoning tasks (ranking, triage) are handled by an AI client connected via MCP.
 | Variable | Description |
 |----------|-------------|
 | `GITHUB_TOKEN` | GitHub Personal Access Token (used if `gh` CLI is unavailable) |
+| `VSCOUT_MCP_HOST` | Host for `--http` mode | `127.0.0.1` |
+| `VSCOUT_MCP_PORT` | Port for `--http` mode | `8000` |
 
 ---
 
@@ -202,7 +409,8 @@ Reasoning tasks (ranking, triage) are handled by an AI client connected via MCP.
 
 - The agent only reads public GitHub data. It never forks, clones, pushes, or opens Pull Requests.
 - The `GITHUB_TOKEN` (if provided) is used only for GitHub API authentication.
-- The MCP server communicates over stdio only — no network server is opened.
+- In stdio mode no network server is opened.
+- In `--http` mode the server binds to `127.0.0.1` only by default. Do not expose the port publicly — the endpoint has no authentication.
 - Tool inputs are validated before execution. Malformed inputs return structured error responses.
 
 ---
@@ -216,6 +424,7 @@ Reasoning tasks (ranking, triage) are handled by an AI client connected via MCP.
 | GitHub API rate limit errors | Authenticate with `gh auth login` or set `GITHUB_TOKEN` in `.env`. |
 | Tool returns `isError: true` | Check the error message in the response. Common causes: invalid issue URL format, network issues, rate limiting. |
 | MCP client can't connect | Ensure `vscout-mcp` is on your system PATH. Verify the client configuration points to the correct executable. |
+| Server exits immediately in HTTP mode | Check that the port is not already in use; try a different `--port`. |
 
 ---
 
@@ -226,18 +435,22 @@ vscout/
 ├── .env.example                 # Template for GitHub token
 ├── config.example.yaml          # Sample configuration template
 ├── pyproject.toml               # Package specifications (defines `agent` and `vscout-mcp` scripts)
-├── requirements.txt             # Python dependencies (includes mcp SDK)
+├── requirements.txt             # Python dependencies (includes fastmcp)
+├── vscout.bat                   # Windows terminal launcher for the MCP server
+├── vscout.command               # macOS terminal launcher for the MCP server
+├── vscout.sh                    # Linux terminal launcher for the MCP server
 ├── agent.py                     # Root CLI entrypoint
 ├── README.md                    # This file
 ├── config.yaml                  # User configuration (created from config.example.yaml)
 ├── .env                         # Environment variables (created from .env.example)
+├── opencode.json                # OpenCode MCP client configuration
 ├── oss_agent/
 │   ├── cli.py                   # Command-line entrypoint & routing
-│   ├── config.py                # Pydantic configuration & template renderer
+│   ├── config.py                # Pydantic configuration & token setup
 │   ├── github.py                # GitHub API client (gh CLI + REST)
 │   ├── state.py                 # SQLite persistent state store
-│   ├── mcp_server.py            # MCP server (stdio transport, tool definitions)
-│   ├── sandbox.py               # Sandbox execution (Docker/venv)
+│   ├── mcp_server.py            # MCP server (stdio/HTTP transport, tool definitions)
+│   ├── terminal_launcher.py     # Terminal launcher: token setup + server entrypoint
 │   └── stages/
 │       ├── stage1_repo_discovery.py   # Repository discovery (data gathering only)
 │       ├── stage2_issue_discovery.py  # Issue discovery
@@ -245,12 +458,12 @@ vscout/
 ├── prompts/
 │   ├── repo_ranker.txt          # Prompt template (retained for reference)
 │   └── issue_triage.txt         # Prompt template (retained for reference)
-├── state/                       # SQLite state database
-├── logs/                        # Application logs
+├── state/                       # SQLite state database (gitignored)
+├── logs/                        # Application logs (gitignored)
 ├── tests/
 │   ├── test_issue_status.py     # Stage 3 tests
 │   └── test_mcp_protocol.py     # End-to-end MCP protocol tests
-└── workspaces/                  # Sandbox workspaces
+└── workspaces/                  # Sandbox workspaces (gitignored)
 ```
 
 ---
@@ -268,4 +481,4 @@ Tests validate:
 - Repeated request handling
 - stdout contains only MCP protocol messages
 - Original CLI continues to work
-
+- Clean shutdown on signal while stdin is open
