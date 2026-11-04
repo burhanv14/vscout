@@ -6,6 +6,9 @@ tech_stack:
   - fastapi
   - typescript
   - react
+  - java
+  - go
+  - rust
 
 experience_level: "intermediate" # beginner | intermediate | advanced
 
@@ -19,31 +22,7 @@ preferred_labels:
 
 min_repo_stars: 50
 max_repo_stars: 25000
-min_recent_activity_days: 30 # commit or active push within last N days
 
-# Repositories or organizations to ignore
-excluded_repos_or_orgs:
-  - "kubernetes/kubernetes"
-
-# Execution limits & thresholds
-max_candidates_per_run: 5
-worth_score_threshold: 65 # Drop issues evaluated below this score
-
-# Contributor identity
+# GitHub token for API access (or set GITHUB_TOKEN env var)
 github:
-  username: "burhanv14"
-  # Path to gh binary if not in system PATH (e.g. C:\Program Files\GitHub CLI\bin\gh.exe or left empty for auto-detect)
-  gh_path: ""
-  # Use API directly if gh CLI is unavailable or fails authentication
-  prefer_gh_cli: true
-
-git:
-  author_name: "Burhan Vora"
-  author_email: "burhanvora14@gmail.com"
-  # Path to git binary if not in system PATH (auto-detects C:\Program Files\Git\cmd\git.exe if empty)
-  git_path: ""
-
-# Sandbox execution for test running: 'auto' | 'docker' | 'venv'
-sandbox:
-  mode: "auto"
-  timeout_seconds: 120
+  token: ""
