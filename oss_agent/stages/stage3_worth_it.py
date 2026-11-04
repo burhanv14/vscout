@@ -1,9 +1,9 @@
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 from pydantic import BaseModel, Field
 
-from oss_agent.config import AppConfig, get_project_root
+from oss_agent.config import AppConfig
 from oss_agent.github import GitHubClient
 from oss_agent.state import StateStore
 
@@ -47,7 +47,6 @@ class WorthItAnalysisStage:
         self.config = config
         self.github = github
         self.state = state
-        self.root = get_project_root()
 
     def analyze_issue(self, issue: Dict[str, Any]) -> IssueAnalysisData:
         """Gather all context for an issue.

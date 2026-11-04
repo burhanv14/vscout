@@ -64,43 +64,6 @@ class StateStore:
                 """
             )
 
-    def save_repo_evaluation(
-        self,
-        repo_full_name: str,
-        stars: int,
-        language: str,
-        health_score: int,
-        fit_score: int,
-        recommendation: str,
-        eval_dict: Dict[str, Any],
-    ) -> None:
-        now = datetime.utcnow().isoformat() + "Z"
-        with self._get_connection() as conn:
-            conn.execute(
-                """
-                INSERT INTO repos (repo_full_name, stars, language, health_score, fit_score, recommendation, evaluation_json, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(repo_full_name) DO UPDATE SET
-                    stars=excluded.stars,
-                    language=excluded.language,
-                    health_score=excluded.health_score,
-                    fit_score=excluded.fit_score,
-                    recommendation=excluded.recommendation,
-                    evaluation_json=excluded.evaluation_json,
-                    updated_at=excluded.updated_at
-                """,
-                (
-                    repo_full_name,
-                    stars,
-                    language,
-                    health_score,
-                    fit_score,
-                    recommendation,
-                    json.dumps(eval_dict),
-                    now,
-                ),
-            )
-
     def save_issue_triage(
         self,
         repo_full_name: str,
