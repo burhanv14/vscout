@@ -35,7 +35,7 @@ def main() -> None:
         "(Ctrl+C or close this window to stop)",
         file=sys.stderr,
     )
-    mcp_main(["--http"])
+    mcp_main([])
 
 
 if __name__ == "__main__":
